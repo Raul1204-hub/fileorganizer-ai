@@ -27,6 +27,7 @@ _scan_state: dict = {
     "total": 0,
     "current_file": "",
     "error": None,
+    "summary": None,    # set after each completed scan
 }
 
 
@@ -198,29 +199,65 @@ def chat_query():
 # ── Scan API ──────────────────────────────────────────────────────────────────
 
 def _run_scan(target_path: str):
-    _scan_state["running"] = True
-    _scan_state["status"] = "scanning"
-    _scan_state["error"] = None
-    _scan_state["progress"] = 0
-    _scan_state["total"] = 0
-    _scan_state["current_file"] = ""
+    _scan_state.update({
+        "running": True,
+        "status": "scanning",
+        "error": None,
+        "progress": 0,
+        "total": 0,
+        "current_file": "",
+        "summary": None,
+    })
 
     try:
+        # ── Phase 1: fast disk scan (stat only, no MD5) ───────────────────────
         def _progress(done, total, filename):
             _scan_state["progress"] = done
             _scan_state["total"] = total
             _scan_state["current_file"] = filename
 
-        # Scan filesystem
-        files = scanner.scan_directory(target_path, progress_callback=_progress)
-        _scan_state["status"] = "indexing"
+        disk_files = scanner.scan_directory_fast(target_path, progress_callback=_progress)
+        disk_paths = {f["ruta_actual"] for f in disk_files}
 
-        # Clear + re-index
-        database.delete_all_archivos()
-        database.clear_recomendaciones()
-        archivo_ids: dict[str, int] = {}
+        # ── Phase 2: reconcile ────────────────────────────────────────────────
+        _scan_state.update({"status": "indexing", "progress": 0, "total": len(disk_files)})
+        db_index = database.get_all_archivos_indexed()
 
-        for f in files:
+        unchanged: list[dict] = []
+        new_files: list[dict] = []
+        modified: list[dict] = []
+        disappeared_ids: list[int] = []
+
+        for f in disk_files:
+            ruta = f["ruta_actual"]
+            db_row = db_index.get(ruta)
+            if db_row is None:
+                new_files.append(f)
+            elif (f["tamaño_bytes"] == db_row["tamaño_bytes"]
+                  and f["fecha_modificacion"] == db_row["fecha_modificacion"]):
+                if not db_row.get("existe", 1):
+                    database.mark_archivo_existe(db_row["id"])
+                unchanged.append(f)
+            else:
+                modified.append({**f, "db_id": db_row["id"]})
+
+        for ruta, db_row in db_index.items():
+            if ruta not in disk_paths:
+                disappeared_ids.append(db_row["id"])
+
+        # Mark disappeared
+        for aid in disappeared_ids:
+            database.mark_archivo_desaparecido(aid)
+
+        # Insert new files
+        cache_hits = 0
+        to_analyze: dict[str, int] = {}
+
+        _scan_state["total"] = len(new_files)
+        for i, f in enumerate(new_files, 1):
+            _scan_state["progress"] = i
+            _scan_state["current_file"] = f["nombre"]
+            f["hash_md5"] = scanner.compute_md5(Path(f["ruta_actual"]))
             aid = database.insert_archivo(
                 nombre=f["nombre"],
                 extension=f["extension"],
@@ -230,32 +267,72 @@ def _run_scan(target_path: str):
                 hash_md5=f["hash_md5"],
                 categoria_id=f["categoria_id"],
             )
-            archivo_ids[f["ruta_actual"]] = aid
             database.insert_historial(aid, None, f["ruta_actual"], "indexar")
+            cached = database.get_resumen_by_hash(f["hash_md5"])
+            if cached and cached["resumen_ia"]:
+                database.update_archivo_resumen(aid, cached["resumen_ia"])
+                database.copy_etiquetas(cached["id"], aid)
+                cache_hits += 1
+            else:
+                to_analyze[f["ruta_actual"]] = aid
 
-        # Analyze Documentos with Ollama
+        # Update modified files
+        for f in modified:
+            _scan_state["current_file"] = f["nombre"]
+            f["hash_md5"] = scanner.compute_md5(Path(f["ruta_actual"]))
+            database.update_archivo_full(
+                archivo_id=f["db_id"],
+                nombre=f["nombre"],
+                extension=f["extension"],
+                ruta_actual=f["ruta_actual"],
+                tamaño_bytes=f["tamaño_bytes"],
+                fecha_modificacion=f["fecha_modificacion"],
+                hash_md5=f["hash_md5"],
+                categoria_id=f["categoria_id"],
+            )
+            database.insert_historial(f["db_id"], f["ruta_actual"], f["ruta_actual"], "actualizar")
+            database.clear_etiquetas_archivo(f["db_id"])
+            database.update_archivo_resumen(f["db_id"], None)
+            cached = database.get_resumen_by_hash(f["hash_md5"])
+            if cached and cached["resumen_ia"]:
+                database.update_archivo_resumen(f["db_id"], cached["resumen_ia"])
+                database.copy_etiquetas(cached["id"], f["db_id"])
+                cache_hits += 1
+            else:
+                to_analyze[f["ruta_actual"]] = f["db_id"]
+
+        # ── Phase 3: Ollama analysis for new/modified docs without cached resumen
         _scan_state["status"] = "analyzing"
         doc_exts = {".pdf", ".docx", ".doc", ".txt", ".odt", ".xlsx", ".csv"}
-        doc_files = [f for f in files if f["extension"].lower() in doc_exts]
-        _scan_state["total"] = len(doc_files)
+        docs_to_analyze = {
+            ruta: aid for ruta, aid in to_analyze.items()
+            if Path(ruta).suffix.lower() in doc_exts
+        }
+        _scan_state["total"] = len(docs_to_analyze)
 
-        for i, f in enumerate(doc_files, 1):
+        for i, (ruta, aid) in enumerate(docs_to_analyze.items(), 1):
             _scan_state["progress"] = i
-            _scan_state["current_file"] = f["nombre"]
-            result = analyzer.analyze_file(Path(f["ruta_actual"]), f["extension"])
+            _scan_state["current_file"] = Path(ruta).name
+            result = analyzer.analyze_file(Path(ruta), Path(ruta).suffix.lower())
             if result:
-                aid = archivo_ids.get(f["ruta_actual"])
-                if aid:
-                    cat_id = scanner.CATEGORIA_IDS.get(result.get("categoria", ""), None)
-                    database.update_archivo_resumen(aid, result.get("resumen", ""), cat_id)
-                    for tag in result.get("etiquetas", []):
-                        if tag:
-                            database.insert_etiqueta(aid, str(tag))
+                cat_id = scanner.CATEGORIA_IDS.get(result.get("categoria", ""), None)
+                database.update_archivo_resumen(aid, result.get("resumen", ""), cat_id)
+                for tag in result.get("etiquetas", []):
+                    if tag:
+                        database.insert_etiqueta(aid, str(tag))
 
-        # Recommendations
+        # ── Phase 4: recommendations ──────────────────────────────────────────
         _scan_state["status"] = "recommending"
+        database.clear_recomendaciones()
         recommendations.run_all_rules()
 
+        _scan_state["summary"] = {
+            "unchanged": len(unchanged),
+            "new": len(new_files),
+            "modified": len(modified),
+            "disappeared": len(disappeared_ids),
+            "cache_hits": cache_hits,
+        }
         _scan_state["status"] = "done"
 
     except Exception as exc:

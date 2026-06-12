@@ -136,3 +136,28 @@ def scan_directory(
             progress_callback(idx, total, path.name)
 
     return files
+
+
+def scan_directory_fast(
+    root_path: str | Path,
+    progress_callback=None,
+) -> list[dict]:
+    """Stat-only scan — no MD5 computation. Used by incremental indexing."""
+    root = Path(root_path)
+    if not root.exists() or not root.is_dir():
+        raise ValueError(f"Path does not exist or is not a directory: {root_path}")
+
+    files: list[dict] = []
+    all_file_paths = [p for p in root.rglob("*") if p.is_file()]
+    total = len(all_file_paths)
+
+    for idx, path in enumerate(all_file_paths, 1):
+        try:
+            meta = get_file_metadata(path)
+            files.append(meta)
+        except (PermissionError, OSError):
+            continue
+        if progress_callback:
+            progress_callback(idx, total, path.name)
+
+    return files

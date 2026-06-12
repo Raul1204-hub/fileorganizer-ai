@@ -45,7 +45,8 @@ def create_tables():
             fecha_indexado     TEXT,
             hash_md5           TEXT,
             categoria_id       INTEGER REFERENCES categorias(id),
-            resumen_ia         TEXT
+            resumen_ia         TEXT,
+            existe             INTEGER DEFAULT 1
         );
 
         CREATE TABLE IF NOT EXISTS etiquetas (
@@ -101,6 +102,20 @@ def create_tables():
         )
     conn.commit()
     conn.close()
+    migrate_schema()
+
+
+def migrate_schema():
+    """Idempotent: add columns introduced after initial release."""
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("PRAGMA table_info(archivos)")
+    existing_cols = {row["name"] for row in cur.fetchall()}
+    if "existe" not in existing_cols:
+        cur.execute("ALTER TABLE archivos ADD COLUMN existe INTEGER DEFAULT 1")
+        cur.execute("UPDATE archivos SET existe = 1 WHERE existe IS NULL")
+        conn.commit()
+    conn.close()
 
 
 # ── archivos ──────────────────────────────────────────────────────────────────
@@ -146,7 +161,7 @@ def get_all_archivos(limit=None, offset=0, categoria_id=None, search=None):
                       c.icono AS categoria_icono
                FROM archivos a
                LEFT JOIN categorias c ON a.categoria_id = c.id
-               WHERE 1=1"""
+               WHERE a.existe = 1"""
     params: list = []
     if categoria_id:
         query += " AND a.categoria_id = ?"
@@ -190,6 +205,87 @@ def delete_all_archivos():
     cur = conn.cursor()
     cur.execute("DELETE FROM etiquetas")
     cur.execute("DELETE FROM archivos")
+    conn.commit()
+    conn.close()
+
+
+def get_all_archivos_indexed() -> dict:
+    """Return {ruta_actual: row_dict} for ALL rows including disappeared ones."""
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT id, ruta_actual, tamaño_bytes, fecha_modificacion, hash_md5, resumen_ia, existe "
+        "FROM archivos"
+    )
+    rows = cur.fetchall()
+    conn.close()
+    return {r["ruta_actual"]: dict(r) for r in rows}
+
+
+def update_archivo_full(archivo_id, nombre, extension, ruta_actual, tamaño_bytes,
+                        fecha_modificacion, hash_md5, categoria_id):
+    """Update metadata for a modified file; preserves resumen_ia and etiquetas rows."""
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        """UPDATE archivos
+           SET nombre=?, extension=?, ruta_actual=?, tamaño_bytes=?,
+               fecha_modificacion=?, hash_md5=?, categoria_id=?, existe=1
+           WHERE id=?""",
+        (nombre, extension, str(ruta_actual), tamaño_bytes,
+         fecha_modificacion, hash_md5, categoria_id, archivo_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+def mark_archivo_desaparecido(archivo_id):
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("UPDATE archivos SET existe = 0 WHERE id = ?", (archivo_id,))
+    conn.commit()
+    conn.close()
+
+
+def mark_archivo_existe(archivo_id):
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("UPDATE archivos SET existe = 1 WHERE id = ?", (archivo_id,))
+    conn.commit()
+    conn.close()
+
+
+def get_resumen_by_hash(hash_md5: str) -> dict | None:
+    """Return {id, resumen_ia} for an existing file with matching hash and a non-null resumen."""
+    if not hash_md5:
+        return None
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT id, resumen_ia FROM archivos WHERE hash_md5 = ? AND resumen_ia IS NOT NULL LIMIT 1",
+        (hash_md5,),
+    )
+    row = cur.fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def copy_etiquetas(source_id: int, dest_id: int):
+    """Duplicate all etiquetas rows from source_id to dest_id."""
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT etiqueta FROM etiquetas WHERE archivo_id = ?", (source_id,))
+    tags = [r["etiqueta"] for r in cur.fetchall()]
+    for tag in tags:
+        cur.execute("INSERT INTO etiquetas (archivo_id, etiqueta) VALUES (?, ?)", (dest_id, tag))
+    conn.commit()
+    conn.close()
+
+
+def clear_etiquetas_archivo(archivo_id: int):
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("DELETE FROM etiquetas WHERE archivo_id = ?", (archivo_id,))
     conn.commit()
     conn.close()
 
@@ -411,13 +507,13 @@ def get_stats():
     conn = get_connection()
     cur = conn.cursor()
 
-    cur.execute("SELECT COUNT(*) AS total FROM archivos")
+    cur.execute("SELECT COUNT(*) AS total FROM archivos WHERE existe = 1")
     total_archivos = cur.fetchone()["total"]
 
-    cur.execute("SELECT COALESCE(SUM(tamaño_bytes), 0) AS total FROM archivos")
+    cur.execute("SELECT COALESCE(SUM(tamaño_bytes), 0) AS total FROM archivos WHERE existe = 1")
     total_size = cur.fetchone()["total"]
 
-    cur.execute("SELECT MAX(fecha_indexado) AS last_scan FROM archivos")
+    cur.execute("SELECT MAX(fecha_indexado) AS last_scan FROM archivos WHERE existe = 1")
     last_scan = cur.fetchone()["last_scan"]
 
     cur.execute("SELECT COUNT(*) AS total FROM recomendaciones WHERE descartada = 0")
@@ -426,7 +522,7 @@ def get_stats():
     cur.execute(
         """SELECT c.nombre, c.color, c.icono, COUNT(a.id) AS count
            FROM categorias c
-           LEFT JOIN archivos a ON a.categoria_id = c.id
+           LEFT JOIN archivos a ON a.categoria_id = c.id AND a.existe = 1
            GROUP BY c.id
            ORDER BY count DESC"""
     )
