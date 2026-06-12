@@ -1,0 +1,179 @@
+{% extends "base.html" %}
+{% block title %}{{ archivo.nombre }} — FileOrganizer AI{% endblock %}
+
+{% block breadcrumb %}
+<a href="/" class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 text-sm">Dashboard</a>
+<i class="fa-solid fa-chevron-right text-gray-300 mx-2 text-xs"></i>
+<span class="text-sm font-semibold text-gray-900 dark:text-white">{{ archivo.nombre }}</span>
+{% endblock %}
+
+{% block page_title %}{% endblock %}
+
+{% block content %}
+
+<div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+
+  <!-- ── Main column ──────────────────────────────────────────────────────── -->
+  <div class="lg:col-span-2 space-y-5">
+
+    <!-- File header -->
+    <div class="bg-white dark:bg-gray-900 rounded-2xl p-6 shadow-sm border border-gray-100 dark:border-gray-800">
+      <div class="flex items-start gap-4">
+        <div class="w-14 h-14 rounded-2xl flex items-center justify-center text-2xl shrink-0"
+             style="background: {{ archivo.categoria_color or '#6B7280' }}22">
+          <span>{{ archivo.categoria_icono or '📄' }}</span>
+        </div>
+        <div class="flex-1 min-w-0">
+          <h1 class="text-xl font-bold text-gray-900 dark:text-white break-all">{{ archivo.nombre }}</h1>
+          <div class="flex items-center gap-2 mt-1 flex-wrap">
+            {% if archivo.categoria_color %}
+            <span class="badge text-white text-xs" style="background: {{ archivo.categoria_color }}">
+              {{ archivo.categoria_icono }} {{ archivo.categoria_nombre }}
+            </span>
+            {% endif %}
+            {% if archivo.extension %}
+            <span class="badge bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-400">{{ archivo.extension }}</span>
+            {% endif %}
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Metadata grid -->
+    <div class="bg-white dark:bg-gray-900 rounded-2xl p-6 shadow-sm border border-gray-100 dark:border-gray-800">
+      <h2 class="font-semibold text-sm text-gray-700 dark:text-gray-300 mb-4">Metadatos</h2>
+      <dl class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <div>
+          <dt class="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-1">Ruta actual</dt>
+          <dd class="text-sm text-gray-700 dark:text-gray-300 break-all font-mono bg-gray-50 dark:bg-gray-800 rounded-lg p-2">{{ archivo.ruta_actual }}</dd>
+        </div>
+        <div>
+          <dt class="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-1">Tamaño</dt>
+          <dd class="text-sm text-gray-700 dark:text-gray-300">{{ archivo.tamaño_bytes | format_size }}</dd>
+        </div>
+        <div>
+          <dt class="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-1">Fecha de modificación</dt>
+          <dd class="text-sm text-gray-700 dark:text-gray-300">{{ (archivo.fecha_modificacion or '—')[:19].replace('T',' ') }}</dd>
+        </div>
+        <div>
+          <dt class="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-1">Fecha de indexado</dt>
+          <dd class="text-sm text-gray-700 dark:text-gray-300">{{ (archivo.fecha_indexado or '—')[:19].replace('T',' ') }}</dd>
+        </div>
+        <div>
+          <dt class="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-1">Hash MD5</dt>
+          <dd class="text-xs text-gray-500 font-mono break-all">{{ archivo.hash_md5 or '—' }}</dd>
+        </div>
+        <div>
+          <dt class="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-1">ID en base de datos</dt>
+          <dd class="text-sm text-gray-500">#{{ archivo.id }}</dd>
+        </div>
+      </dl>
+    </div>
+
+    <!-- AI summary -->
+    {% if archivo.resumen_ia %}
+    <div class="bg-indigo-50 dark:bg-indigo-950 rounded-2xl p-5 border border-indigo-100 dark:border-indigo-900">
+      <div class="flex items-center gap-2 mb-3">
+        <i class="fa-solid fa-robot text-indigo-600 dark:text-indigo-400"></i>
+        <span class="font-semibold text-sm text-indigo-700 dark:text-indigo-300">Resumen generado por IA</span>
+      </div>
+      <blockquote class="text-sm text-indigo-800 dark:text-indigo-200 italic leading-relaxed border-l-4 border-indigo-400 pl-4">
+        {{ archivo.resumen_ia }}
+      </blockquote>
+    </div>
+    {% endif %}
+
+    <!-- Tags -->
+    {% if etiquetas %}
+    <div class="bg-white dark:bg-gray-900 rounded-2xl p-5 shadow-sm border border-gray-100 dark:border-gray-800">
+      <h2 class="font-semibold text-sm text-gray-700 dark:text-gray-300 mb-3">
+        <i class="fa-solid fa-tags text-violet-500 mr-1"></i> Etiquetas IA
+      </h2>
+      <div class="flex flex-wrap gap-2">
+        {% for tag in etiquetas %}
+        <span class="badge bg-violet-100 dark:bg-violet-950 text-violet-700 dark:text-violet-300 text-xs px-3 py-1">{{ tag }}</span>
+        {% endfor %}
+      </div>
+    </div>
+    {% endif %}
+
+    <!-- History timeline -->
+    {% if historial %}
+    <div class="bg-white dark:bg-gray-900 rounded-2xl p-5 shadow-sm border border-gray-100 dark:border-gray-800">
+      <h2 class="font-semibold text-sm text-gray-700 dark:text-gray-300 mb-4">
+        <i class="fa-solid fa-timeline text-amber-500 mr-1"></i> Historial de operaciones
+      </h2>
+      <div class="space-y-3">
+        {% for h in historial %}
+        {% set op_colors = {'mover': 'bg-blue-500', 'reversion': 'bg-orange-500', 'indexar': 'bg-emerald-500', 'renombrar': 'bg-violet-500'} %}
+        <div class="flex items-start gap-3">
+          <div class="w-2 h-2 rounded-full mt-2 shrink-0 {{ op_colors.get(h.operacion, 'bg-gray-400') }}"></div>
+          <div class="flex-1">
+            <div class="flex items-center gap-2">
+              <span class="text-xs font-semibold text-gray-700 dark:text-gray-300 capitalize">{{ h.operacion }}</span>
+              <span class="text-xs text-gray-400">{{ (h.fecha or '')[:16].replace('T',' ') }}</span>
+            </div>
+            {% if h.ruta_origen %}<div class="text-xs text-gray-400 truncate">De: {{ h.ruta_origen }}</div>{% endif %}
+            {% if h.ruta_destino %}<div class="text-xs text-gray-400 truncate">A: {{ h.ruta_destino }}</div>{% endif %}
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+    {% endif %}
+
+  </div>
+
+  <!-- ── Sidebar column ───────────────────────────────────────────────────── -->
+  <div class="space-y-5">
+
+    <!-- Actions -->
+    <div class="bg-white dark:bg-gray-900 rounded-2xl p-5 shadow-sm border border-gray-100 dark:border-gray-800">
+      <h2 class="font-semibold text-sm text-gray-700 dark:text-gray-300 mb-3">Acciones</h2>
+      <div class="space-y-2">
+        <button onclick="openFolder()"
+                class="w-full flex items-center gap-3 px-4 py-2.5 rounded-xl border border-gray-200 dark:border-gray-700 text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800 transition">
+          <i class="fa-solid fa-folder-open text-amber-500 w-4 text-center"></i> Abrir carpeta
+        </button>
+        <a href="/chat" class="w-full flex items-center gap-3 px-4 py-2.5 rounded-xl border border-gray-200 dark:border-gray-700 text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800 transition">
+          <i class="fa-solid fa-comments text-violet-500 w-4 text-center"></i> Buscar con Chat IA
+        </a>
+        <a href="/backup" class="w-full flex items-center gap-3 px-4 py-2.5 rounded-xl border border-gray-200 dark:border-gray-700 text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800 transition">
+          <i class="fa-solid fa-rotate-left text-rose-500 w-4 text-center"></i> Gestor de backup
+        </a>
+      </div>
+    </div>
+
+    <!-- Recommendations -->
+    {% if recs %}
+    <div class="bg-white dark:bg-gray-900 rounded-2xl p-5 shadow-sm border border-gray-100 dark:border-gray-800">
+      <h2 class="font-semibold text-sm text-gray-700 dark:text-gray-300 mb-3">
+        <i class="fa-solid fa-triangle-exclamation text-amber-500 mr-1"></i> Recomendaciones
+      </h2>
+      <div class="space-y-2">
+        {% set rec_icons = {'R1':'🔄','R2':'🕰️','R3':'⚖️','R4':'📂','R5':'🔐','R6':'🗑️','R7':'🎬'} %}
+        {% for rec in recs %}
+        <div class="p-3 bg-amber-50 dark:bg-amber-950 rounded-xl border border-amber-200 dark:border-amber-800">
+          <div class="text-xs font-semibold text-amber-700 dark:text-amber-400 mb-1">
+            {{ rec_icons.get(rec.tipo, '⚠️') }} {{ rec.tipo }}
+          </div>
+          <div class="text-xs text-amber-800 dark:text-amber-300">{{ rec.mensaje }}</div>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+    {% endif %}
+
+  </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+  function openFolder() {
+    const path = {{ archivo.ruta_actual | tojson }};
+    showToast('Usa tu explorador de archivos para abrir: ' + path, 'info');
+  }
+</script>
+{% endblock %}

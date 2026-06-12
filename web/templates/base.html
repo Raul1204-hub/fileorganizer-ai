@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="es" class="h-full">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}FileOrganizer AI{% endblock %}</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: { extend: { fontFamily: { sans: ['Inter', 'sans-serif'] } } }
+    }
+  </script>
+  <style>
+    body { font-family: 'Inter', sans-serif; }
+    .nav-link {
+      display: flex; align-items: center; gap: 0.75rem;
+      padding: 0.625rem 1rem; border-radius: 0.5rem;
+      font-size: 0.875rem; font-weight: 500;
+      color: #4B5563; transition: all 0.15s;
+      text-decoration: none;
+    }
+    .nav-link:hover { background: #EEF2FF; color: #4338CA; }
+    .nav-link.active { background: #E0E7FF; color: #4338CA; }
+    .dark .nav-link { color: #9CA3AF; }
+    .dark .nav-link:hover { background: #374151; color: #E5E7EB; }
+    .dark .nav-link.active { background: #312E81; color: #C7D2FE; }
+    .badge {
+      display: inline-flex; align-items: center;
+      padding: 0.125rem 0.625rem; border-radius: 9999px;
+      font-size: 0.75rem; font-weight: 500;
+    }
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: #CBD5E1; border-radius: 3px; }
+    .dark ::-webkit-scrollbar-thumb { background: #4B5563; }
+  </style>
+  {% block head %}{% endblock %}
+</head>
+<body class="h-full bg-gray-50 dark:bg-gray-950 text-gray-900 dark:text-gray-100 transition-colors">
+
+<div class="flex h-full">
+
+  <!-- ── Sidebar ─────────────────────────────────────────────────────────── -->
+  <aside id="sidebar" class="fixed inset-y-0 left-0 z-40 w-60 bg-white dark:bg-gray-900 border-r border-gray-200 dark:border-gray-800 flex flex-col shadow-sm">
+
+    <!-- Logo -->
+    <div class="flex items-center gap-3 px-5 py-4 border-b border-gray-200 dark:border-gray-800">
+      <div class="w-9 h-9 bg-indigo-600 rounded-xl flex items-center justify-center shadow">
+        <i class="fa-solid fa-folder-open text-white"></i>
+      </div>
+      <div class="leading-tight">
+        <div class="font-bold text-sm text-gray-900 dark:text-white">FileOrganizer</div>
+        <div class="text-xs font-semibold text-indigo-500">AI · Offline</div>
+      </div>
+    </div>
+
+    <!-- Navigation -->
+    <nav class="flex-1 overflow-y-auto px-3 py-4 space-y-0.5">
+      <a href="/" class="nav-link {% if request.path == '/' %}active{% endif %}">
+        <i class="fa-solid fa-house w-4 text-center text-indigo-500"></i> Dashboard
+      </a>
+      <a href="/?view=all" class="nav-link">
+        <i class="fa-solid fa-folder-tree w-4 text-center text-emerald-500"></i> Explorar archivos
+      </a>
+      <a href="/chat" class="nav-link {% if request.path == '/chat' %}active{% endif %}">
+        <i class="fa-solid fa-comments w-4 text-center text-violet-500"></i> Chat IA
+      </a>
+      <a href="/historial" class="nav-link {% if '/historial' in request.path %}active{% endif %}">
+        <i class="fa-solid fa-clock-rotate-left w-4 text-center text-amber-500"></i> Historial
+      </a>
+      <a href="/backup" class="nav-link {% if '/backup' in request.path %}active{% endif %}">
+        <i class="fa-solid fa-rotate-left w-4 text-center text-rose-500"></i> Backup &amp; Undo
+      </a>
+    </nav>
+
+    <!-- Footer -->
+    <div class="px-4 py-3 border-t border-gray-200 dark:border-gray-800">
+      <div class="flex items-center gap-2 text-xs text-gray-400">
+        <span class="w-2 h-2 rounded-full bg-emerald-400 inline-block"></span>
+        <span>Ollama local · 100% offline</span>
+      </div>
+    </div>
+  </aside>
+
+  <!-- ── Main area ──────────────────────────────────────────────────────────── -->
+  <div class="ml-60 flex-1 flex flex-col min-h-screen overflow-x-hidden">
+
+    <!-- Top bar -->
+    <header class="sticky top-0 z-30 bg-white/90 dark:bg-gray-900/90 backdrop-blur border-b border-gray-200 dark:border-gray-800 px-6 h-14 flex items-center justify-between">
+      <div class="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-400">
+        {% block breadcrumb %}
+        <span class="font-semibold text-gray-900 dark:text-white">{% block page_title %}FileOrganizer AI{% endblock %}</span>
+        {% endblock %}
+      </div>
+
+      <div class="flex items-center gap-2">
+        <!-- Scan indicator -->
+        <div id="scan-indicator" class="hidden items-center gap-2 px-3 py-1.5 bg-indigo-50 dark:bg-indigo-950 rounded-full text-xs font-medium text-indigo-700 dark:text-indigo-300">
+          <i class="fa-solid fa-spinner fa-spin"></i>
+          <span id="scan-indicator-text">Escaneando…</span>
+        </div>
+        <!-- Dark mode -->
+        <button onclick="toggleDark()" title="Toggle dark mode"
+                class="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-500 dark:text-gray-400 transition">
+          <i class="fa-solid fa-moon dark:hidden text-sm"></i>
+          <i class="fa-solid fa-sun hidden dark:block text-sm"></i>
+        </button>
+      </div>
+    </header>
+
+    <!-- Page content -->
+    <main class="flex-1 p-6">
+      {% block content %}{% endblock %}
+    </main>
+
+  </div><!-- end main area -->
+</div><!-- end flex -->
+
+<!-- ── Toast container ──────────────────────────────────────────────────────── -->
+<div id="toast-container" class="fixed bottom-5 right-5 z-50 flex flex-col gap-2 pointer-events-none"></div>
+
+<script>
+  // ── Dark mode ──────────────────────────────────────────────────────────────
+  function toggleDark() {
+    const html = document.documentElement;
+    html.classList.toggle('dark');
+    localStorage.setItem('fo-dark', html.classList.contains('dark') ? '1' : '0');
+  }
+  if (localStorage.getItem('fo-dark') === '1') {
+    document.documentElement.classList.add('dark');
+  }
+
+  // ── Toast helper ───────────────────────────────────────────────────────────
+  function showToast(msg, type = 'info') {
+    const colors = {
+      success: 'bg-emerald-600',
+      error: 'bg-red-600',
+      info: 'bg-indigo-600',
+      warning: 'bg-amber-500',
+    };
+    const el = document.createElement('div');
+    el.className = `pointer-events-auto px-4 py-3 rounded-xl text-white text-sm shadow-lg ${colors[type] || colors.info} flex items-center gap-2 animate-bounce`;
+    el.innerHTML = `<i class="fa-solid fa-circle-info"></i> <span>${msg}</span>`;
+    document.getElementById('toast-container').appendChild(el);
+    setTimeout(() => el.remove(), 4000);
+  }
+
+  // ── Scan status polling ────────────────────────────────────────────────────
+  const STATUS_LABELS = {
+    scanning: 'Escaneando archivos',
+    indexing: 'Indexando en BD',
+    analyzing: 'Analizando con IA',
+    recommending: 'Generando recomendaciones',
+  };
+  let _lastStatus = 'idle';
+
+  function pollScan() {
+    fetch('/api/scan/status')
+      .then(r => r.json())
+      .then(s => {
+        const ind = document.getElementById('scan-indicator');
+        const txt = document.getElementById('scan-indicator-text');
+        if (s.running) {
+          ind.classList.remove('hidden');
+          ind.classList.add('flex');
+          const label = STATUS_LABELS[s.status] || s.status;
+          const pct = s.total > 0 ? ` (${s.progress}/${s.total})` : '';
+          txt.textContent = `${label}${pct}`;
+        } else {
+          ind.classList.add('hidden');
+          ind.classList.remove('flex');
+          if (_lastStatus === 'analyzing' || _lastStatus === 'recommending') {
+            showToast('¡Escaneo completado!', 'success');
+            setTimeout(() => location.reload(), 1200);
+          }
+        }
+        _lastStatus = s.status;
+      })
+      .catch(() => {});
+  }
+  setInterval(pollScan, 2500);
+</script>
+
+{% block scripts %}{% endblock %}
+</body>
+</html>

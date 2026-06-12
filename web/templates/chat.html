@@ -1,0 +1,234 @@
+{% extends "base.html" %}
+{% block title %}Chat IA — FileOrganizer AI{% endblock %}
+{% block page_title %}Chat con IA{% endblock %}
+
+{% block head %}
+<style>
+  #chat-messages { scroll-behavior: smooth; }
+  .bubble-user { background: #4F46E5; color: white; border-radius: 1.25rem 1.25rem 0.25rem 1.25rem; }
+  .bubble-ai   { background: white; color: #1F2937; border-radius: 1.25rem 1.25rem 1.25rem 0.25rem; border: 1px solid #E5E7EB; }
+  .dark .bubble-ai { background: #1F2937; color: #F9FAFB; border-color: #374151; }
+  .typing-dot { width: 7px; height: 7px; border-radius: 50%; background: #9CA3AF; animation: bounce 1.2s infinite; }
+  .typing-dot:nth-child(2) { animation-delay: 0.2s; }
+  .typing-dot:nth-child(3) { animation-delay: 0.4s; }
+  @keyframes bounce { 0%,80%,100% { transform: translateY(0); } 40% { transform: translateY(-7px); } }
+</style>
+{% endblock %}
+
+{% block content %}
+
+<div class="flex flex-col h-[calc(100vh-8rem)] max-w-4xl mx-auto">
+
+  <!-- Messages area -->
+  <div id="chat-messages" class="flex-1 overflow-y-auto px-2 pb-4 space-y-4">
+
+    <!-- Welcome message -->
+    {% if not historial %}
+    <div class="text-center py-10">
+      <div class="w-16 h-16 bg-indigo-100 dark:bg-indigo-950 rounded-2xl flex items-center justify-center mx-auto mb-4">
+        <i class="fa-solid fa-robot text-indigo-600 dark:text-indigo-400 text-2xl"></i>
+      </div>
+      <h2 class="font-bold text-lg text-gray-900 dark:text-white mb-2">Chat con tus archivos</h2>
+      <p class="text-sm text-gray-500 max-w-sm mx-auto">
+        Haz preguntas en lenguaje natural sobre tus archivos. La IA generará consultas SQL y responderá en español.
+      </p>
+    </div>
+    {% endif %}
+
+    <!-- Past history -->
+    {% for h in historial %}
+    <div class="flex justify-end">
+      <div class="bubble-user max-w-xl px-4 py-3 text-sm shadow-sm">{{ h.pregunta }}</div>
+    </div>
+    <div class="flex justify-start gap-3">
+      <div class="w-8 h-8 bg-indigo-600 rounded-full flex items-center justify-center shrink-0 mt-1">
+        <i class="fa-solid fa-robot text-white text-xs"></i>
+      </div>
+      <div class="bubble-ai max-w-xl px-4 py-3 text-sm shadow-sm">
+        <p>{{ h.respuesta }}</p>
+        {% if h.sql_generada %}
+        <details class="mt-2">
+          <summary class="text-xs text-gray-400 cursor-pointer hover:text-gray-600 dark:hover:text-gray-300">Ver SQL generada</summary>
+          <pre class="text-xs mt-1 bg-gray-100 dark:bg-gray-800 rounded-lg p-2 overflow-x-auto font-mono">{{ h.sql_generada }}</pre>
+        </details>
+        {% endif %}
+      </div>
+    </div>
+    {% endfor %}
+
+  </div>
+
+  <!-- Suggested chips (shown when no conversation or always) -->
+  <div id="chips-row" class="px-2 pb-3 flex flex-wrap gap-2">
+    <button onclick="sendSuggestion('¿Dónde están mis facturas?')"
+            class="chip px-3 py-1.5 text-xs bg-indigo-50 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800 rounded-full hover:bg-indigo-100 dark:hover:bg-indigo-900 transition">
+      ¿Dónde están mis facturas?
+    </button>
+    <button onclick="sendSuggestion('¿Qué archivos ocupan más espacio?')"
+            class="chip px-3 py-1.5 text-xs bg-indigo-50 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800 rounded-full hover:bg-indigo-100 dark:hover:bg-indigo-900 transition">
+      ¿Qué archivos ocupan más espacio?
+    </button>
+    <button onclick="sendSuggestion('¿Tengo archivos duplicados?')"
+            class="chip px-3 py-1.5 text-xs bg-indigo-50 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800 rounded-full hover:bg-indigo-100 dark:hover:bg-indigo-900 transition">
+      ¿Tengo archivos duplicados?
+    </button>
+    <button onclick="sendSuggestion('¿Qué no he abierto en más de un año?')"
+            class="chip px-3 py-1.5 text-xs bg-indigo-50 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800 rounded-full hover:bg-indigo-100 dark:hover:bg-indigo-900 transition">
+      ¿Qué no he abierto en más de un año?
+    </button>
+  </div>
+
+  <!-- Input bar -->
+  <div class="border-t border-gray-200 dark:border-gray-800 pt-4 px-2">
+    <div class="flex items-end gap-3">
+      <div class="flex-1 bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-2xl shadow-sm px-4 py-3 flex items-center gap-2">
+        <textarea id="chat-input" rows="1"
+                  placeholder="Escribe tu pregunta sobre los archivos…"
+                  class="flex-1 bg-transparent text-sm resize-none focus:outline-none dark:text-gray-200 placeholder-gray-400 max-h-32 overflow-y-auto"
+                  onkeydown="handleKey(event)" oninput="autoResize(this)"></textarea>
+      </div>
+      <button id="send-btn" onclick="sendMessage()"
+              class="w-12 h-12 bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-300 text-white rounded-2xl flex items-center justify-center shadow transition shrink-0">
+        <i class="fa-solid fa-paper-plane text-sm"></i>
+      </button>
+    </div>
+    <div class="text-center mt-2 text-xs text-gray-400">
+      <i class="fa-solid fa-lock mr-1"></i> Procesado 100% localmente con Ollama · Enter para enviar · Shift+Enter para nueva línea
+    </div>
+  </div>
+
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+  let _busy = false;
+
+  function autoResize(el) {
+    el.style.height = 'auto';
+    el.style.height = Math.min(el.scrollHeight, 128) + 'px';
+  }
+
+  function handleKey(e) {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
+  }
+
+  function sendSuggestion(text) {
+    document.getElementById('chat-input').value = text;
+    sendMessage();
+  }
+
+  function sendMessage() {
+    if (_busy) return;
+    const input = document.getElementById('chat-input');
+    const question = input.value.trim();
+    if (!question) return;
+
+    _busy = true;
+    input.value = '';
+    input.style.height = 'auto';
+    document.getElementById('send-btn').disabled = true;
+
+    const msgs = document.getElementById('chat-messages');
+
+    // User bubble
+    msgs.insertAdjacentHTML('beforeend', `
+      <div class="flex justify-end">
+        <div class="bubble-user max-w-xl px-4 py-3 text-sm shadow-sm">${esc(question)}</div>
+      </div>`);
+
+    // Typing indicator
+    const typingId = 'typing-' + Date.now();
+    msgs.insertAdjacentHTML('beforeend', `
+      <div id="${typingId}" class="flex justify-start gap-3">
+        <div class="w-8 h-8 bg-indigo-600 rounded-full flex items-center justify-center shrink-0 mt-1">
+          <i class="fa-solid fa-robot text-white text-xs"></i>
+        </div>
+        <div class="bubble-ai px-4 py-3 shadow-sm">
+          <div class="flex items-center gap-1">
+            <div class="typing-dot"></div><div class="typing-dot"></div><div class="typing-dot"></div>
+          </div>
+        </div>
+      </div>`);
+
+    scrollToBottom();
+
+    fetch('/chat/query', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({question}),
+    })
+    .then(r => r.json())
+    .then(d => {
+      document.getElementById(typingId)?.remove();
+
+      const resultCards = (d.resultados || []).slice(0, 5).map(r =>
+        `<div class="mt-2 p-2 bg-gray-50 dark:bg-gray-800 rounded-lg text-xs border border-gray-200 dark:border-gray-700">
+          <a href="/archivo/${r.id || ''}" class="font-semibold text-indigo-600 dark:text-indigo-400 hover:underline block truncate">${esc(r.nombre || '')}</a>
+          <div class="text-gray-400 truncate">${esc(r.ruta_actual || '')}</div>
+          <div class="flex gap-2 mt-1 text-gray-400">
+            <span>${formatSize(r.tamaño_bytes)}</span>
+          </div>
+        </div>`
+      ).join('');
+
+      const sqlBlock = d.sql
+        ? `<details class="mt-2"><summary class="text-xs text-gray-400 cursor-pointer hover:text-gray-600 dark:hover:text-gray-300">Ver SQL generada</summary>
+           <pre class="text-xs mt-1 bg-gray-100 dark:bg-gray-800 rounded-lg p-2 overflow-x-auto font-mono">${esc(d.sql)}</pre></details>`
+        : '';
+
+      msgs.insertAdjacentHTML('beforeend', `
+        <div class="flex justify-start gap-3">
+          <div class="w-8 h-8 bg-indigo-600 rounded-full flex items-center justify-center shrink-0 mt-1">
+            <i class="fa-solid fa-robot text-white text-xs"></i>
+          </div>
+          <div class="bubble-ai max-w-xl px-4 py-3 text-sm shadow-sm">
+            <p>${esc(d.respuesta || 'Sin respuesta')}</p>
+            ${resultCards}
+            ${sqlBlock}
+          </div>
+        </div>`);
+
+      scrollToBottom();
+    })
+    .catch(() => {
+      document.getElementById(typingId)?.remove();
+      msgs.insertAdjacentHTML('beforeend', `
+        <div class="flex justify-start gap-3">
+          <div class="w-8 h-8 bg-red-500 rounded-full flex items-center justify-center shrink-0 mt-1">
+            <i class="fa-solid fa-exclamation text-white text-xs"></i>
+          </div>
+          <div class="bubble-ai max-w-xl px-4 py-3 text-sm text-red-600 dark:text-red-400 shadow-sm">
+            Error de conexión. ¿Está Ollama corriendo?
+          </div>
+        </div>`);
+      scrollToBottom();
+    })
+    .finally(() => {
+      _busy = false;
+      document.getElementById('send-btn').disabled = false;
+    });
+  }
+
+  function scrollToBottom() {
+    const el = document.getElementById('chat-messages');
+    el.scrollTop = el.scrollHeight;
+  }
+
+  function esc(s) {
+    return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  }
+
+  function formatSize(b) {
+    if (!b) return '0 B';
+    const u = ['B','KB','MB','GB'];
+    let i = 0;
+    while (b >= 1024 && i < u.length - 1) { b /= 1024; i++; }
+    return `${b.toFixed(1)} ${u[i]}`;
+  }
+
+  // Scroll to bottom on load
+  scrollToBottom();
+</script>
+{% endblock %}
