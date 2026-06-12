@@ -77,6 +77,9 @@
       <a href="/chat" class="nav-link {% if request.path == '/chat' %}active{% endif %}">
         <i class="fa-solid fa-comments w-4 text-center text-violet-500"></i> Chat IA
       </a>
+      <a href="/vigilancia" class="nav-link {% if '/vigilancia' in request.path %}active{% endif %}">
+        <i class="fa-solid fa-eye w-4 text-center text-teal-500"></i> Vigilancia
+      </a>
       <a href="/historial" class="nav-link {% if '/historial' in request.path %}active{% endif %}">
         <i class="fa-solid fa-clock-rotate-left w-4 text-center text-amber-500"></i> Historial
       </a>
@@ -106,6 +109,13 @@
       </div>
 
       <div class="flex items-center gap-2">
+        <!-- Watch indicator -->
+        <a href="/vigilancia" id="watch-indicator"
+           class="hidden items-center gap-2 px-3 py-1.5 bg-teal-50 dark:bg-teal-950 rounded-full
+                  text-xs font-medium text-teal-700 dark:text-teal-300 no-underline">
+          <span class="w-2 h-2 rounded-full bg-teal-400 animate-pulse inline-block"></span>
+          <span>Vigilando</span>
+        </a>
         <!-- Scan indicator -->
         <div id="scan-indicator" class="hidden items-center gap-2 px-3 py-1.5 bg-indigo-50 dark:bg-indigo-950 rounded-full text-xs font-medium text-indigo-700 dark:text-indigo-300 cursor-pointer" onclick="document.getElementById('scan-panel').classList.toggle('hidden')">
           <i class="fa-solid fa-spinner fa-spin"></i>
@@ -285,6 +295,20 @@
   fetch('/api/scan/status').then(r => r.json()).then(s => {
     if (s.running) { _applyState(s); _startSSE(); }
   }).catch(() => {});
+
+  // ── Watch indicator (global header) ───────────────────────────────────────
+  function _updateWatchIndicator() {
+    fetch('/api/watch/status').then(r => r.json()).then(s => {
+      const ind = document.getElementById('watch-indicator');
+      if (s.running) {
+        ind.classList.remove('hidden'); ind.classList.add('flex');
+      } else {
+        ind.classList.add('hidden'); ind.classList.remove('flex');
+      }
+    }).catch(() => {});
+  }
+  _updateWatchIndicator();
+  setInterval(_updateWatchIndicator, 5000);
 </script>
 
 {% block scripts %}{% endblock %}

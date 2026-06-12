@@ -1,5 +1,6 @@
 import sqlite3
 from datetime import datetime
+from pathlib import Path
 
 from config import DB_PATH
 
@@ -275,6 +276,72 @@ def get_all_archivos_indexed() -> dict:
     rows = cur.fetchall()
     conn.close()
     return {r["ruta_actual"]: dict(r) for r in rows}
+
+
+def get_archivo_by_ruta(ruta: str) -> dict | None:
+    """Return the archivos row for a given path, or None if not found."""
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT id, ruta_actual, tamaño_bytes, fecha_modificacion, hash_blake2, resumen_ia, existe "
+        "FROM archivos WHERE ruta_actual = ?",
+        (str(ruta),),
+    )
+    row = cur.fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def move_directory_archivos(old_prefix: str, new_prefix: str) -> int:
+    """Update ruta_actual for all files whose path starts with old_prefix.
+
+    Used when a watched directory is renamed/moved so every child record
+    gets its path updated atomically.  Returns the number of rows changed.
+    """
+    old_p = Path(old_prefix)
+    new_p = Path(new_prefix)
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT id, ruta_actual FROM archivos WHERE existe = 1")
+    rows = cur.fetchall()
+    count = 0
+    for row in rows:
+        try:
+            rel = Path(row["ruta_actual"]).relative_to(old_p)
+        except ValueError:
+            continue
+        new_ruta = str(new_p / rel)
+        cur.execute("UPDATE archivos SET ruta_actual = ? WHERE id = ?", (new_ruta, row["id"]))
+        count += 1
+    if count:
+        conn.commit()
+    conn.close()
+    return count
+
+
+def mark_archivos_bajo_ruta_desaparecidos(prefix: str) -> int:
+    """Mark all existing files whose path starts with prefix as disappeared (existe=0).
+
+    Used when a watched directory is deleted so every child record is
+    updated to reflect that the files are gone.  Returns the count updated.
+    """
+    prefix_p = Path(prefix)
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT id, ruta_actual FROM archivos WHERE existe = 1")
+    rows = cur.fetchall()
+    count = 0
+    for row in rows:
+        try:
+            Path(row["ruta_actual"]).relative_to(prefix_p)
+        except ValueError:
+            continue
+        cur.execute("UPDATE archivos SET existe = 0 WHERE id = ?", (row["id"],))
+        count += 1
+    if count:
+        conn.commit()
+    conn.close()
+    return count
 
 
 def update_archivo_full(

@@ -1,3 +1,4 @@
+import atexit
 import json
 import sys
 import threading
@@ -23,6 +24,7 @@ import database
 import organizer
 import recommendations
 import scanner
+import watcher as _watcher_module
 
 app = Flask(__name__, template_folder="templates")
 app.secret_key = "fileorganizer-ai-secret-2024"
@@ -706,11 +708,48 @@ def api_archivos():
     return jsonify(archivos)
 
 
+# ── Vigilancia (watch) ────────────────────────────────────────────────────────
+
+
+@app.route("/vigilancia")
+def vigilancia():
+    return render_template("vigilancia.html", watch_status=_watcher_module.manager.get_status())
+
+
+@app.route("/api/watch/start", methods=["POST"])
+def api_watch_start():
+    data = request.get_json() or {}
+    folder = (data.get("path") or "").strip()
+    if not folder:
+        return jsonify({"error": "Ruta no proporcionada"}), 400
+    if not Path(folder).is_dir():
+        return jsonify({"error": f"La ruta no existe o no es una carpeta: {folder}"}), 400
+    try:
+        _watcher_module.manager.start(folder)
+        return jsonify({"status": "started", "folder": folder})
+    except RuntimeError as exc:
+        return jsonify({"error": str(exc)}), 409
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.route("/api/watch/stop", methods=["POST"])
+def api_watch_stop():
+    _watcher_module.manager.stop()
+    return jsonify({"status": "stopped"})
+
+
+@app.route("/api/watch/status")
+def api_watch_status():
+    return jsonify(_watcher_module.manager.get_status())
+
+
 # ── Server entry point ────────────────────────────────────────────────────────
 
 
 def start_server(open_browser: bool = True):
     database.create_tables()
+    atexit.register(_watcher_module.manager.stop)
     if open_browser:
         threading.Timer(1.2, lambda: webbrowser.open("http://localhost:5000")).start()
     app.run(host="0.0.0.0", port=5000, debug=False, use_reloader=False)

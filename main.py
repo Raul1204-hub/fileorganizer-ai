@@ -1,13 +1,15 @@
 """FileOrganizer AI — entry point.
 
 Usage:
-  python main.py           → start web UI (default)
-  python main.py web       → start web UI
-  python main.py scan PATH → scan directory via CLI (no web server)
+  python main.py            → start web UI (default)
+  python main.py web        → start web UI
+  python main.py scan PATH  → scan directory via CLI (no web server)
+  python main.py watch PATH → watch directory for changes (CLI mode)
 """
 
 import argparse
 import sys
+import time
 from pathlib import Path
 
 import database
@@ -214,6 +216,28 @@ Done. Start the web UI with: python main.py
 """)
 
 
+def cli_watch(target_path: str) -> None:
+    """Watch a directory for filesystem changes and index them automatically."""
+    _log.setup_logging()
+    from watcher import manager as watch_manager
+
+    database.create_tables()
+    watch_manager.start(target_path)
+    print(f"[+] Watching: {target_path}")
+    print("[+] Events are logged to logs/fileorganizer.log")
+    print("[+] Press Ctrl+C to stop\n")
+
+    try:
+        while watch_manager.get_status()["running"]:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        print("\n[+] Stopping watcher…")
+    finally:
+        watch_manager.stop()
+        status = watch_manager.get_status()
+        print(f"[+] Stopped — {status['events_processed']} event(s) processed")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="FileOrganizer AI — offline AI-powered file organizer",
@@ -227,6 +251,9 @@ def main() -> None:
     scan_p = subparsers.add_parser("scan", help="Scan a directory from CLI")
     scan_p.add_argument("path", help="Path to the directory to scan")
 
+    watch_p = subparsers.add_parser("watch", help="Watch a directory for changes (CLI mode)")
+    watch_p.add_argument("path", help="Path to the directory to watch")
+
     args = parser.parse_args()
 
     if args.command == "scan":
@@ -234,6 +261,11 @@ def main() -> None:
             print(f"[!] Path does not exist: {args.path}", file=sys.stderr)
             sys.exit(1)
         cli_scan(args.path)
+    elif args.command == "watch":
+        if not Path(args.path).is_dir():
+            print(f"[!] Path does not exist or is not a directory: {args.path}", file=sys.stderr)
+            sys.exit(1)
+        cli_watch(args.path)
     else:
         # Default: launch web server
         database.create_tables()

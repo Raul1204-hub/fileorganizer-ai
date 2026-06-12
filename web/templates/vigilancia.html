@@ -1,0 +1,178 @@
+{% extends "base.html" %}
+{% block title %}Vigilancia — FileOrganizer AI{% endblock %}
+{% block page_title %}Vigilancia automática{% endblock %}
+
+{% block content %}
+<div class="max-w-3xl mx-auto space-y-6">
+
+  <!-- Status card -->
+  <div class="bg-white dark:bg-gray-900 rounded-2xl border border-gray-200 dark:border-gray-800 p-6">
+    <div class="flex items-center justify-between mb-5">
+      <div>
+        <h2 class="text-lg font-semibold text-gray-900 dark:text-white">Estado del observador</h2>
+        <p class="text-sm text-gray-500 dark:text-gray-400 mt-0.5">Detecta cambios en tiempo real e indexa automáticamente.</p>
+      </div>
+      <div id="watch-badge"
+           class="text-white text-xs font-semibold px-3 py-1.5 rounded-full {% if watch_status.running %}bg-emerald-500{% else %}bg-gray-400{% endif %}">
+        {% if watch_status.running %}Activo{% else %}Inactivo{% endif %}
+      </div>
+    </div>
+
+    <!-- Stats grid (visible when running) -->
+    <div id="watch-info" class="{% if not watch_status.running %}hidden {% endif %}grid grid-cols-2 gap-3 mb-5">
+      <div class="bg-gray-50 dark:bg-gray-800 rounded-xl p-4">
+        <div class="text-xs text-gray-500 dark:text-gray-400 mb-1">Carpeta vigilada</div>
+        <div id="watch-folder" class="text-sm font-medium text-gray-900 dark:text-white truncate">
+          {{ watch_status.folder or '—' }}
+        </div>
+      </div>
+      <div class="bg-gray-50 dark:bg-gray-800 rounded-xl p-4">
+        <div class="text-xs text-gray-500 dark:text-gray-400 mb-1">Último evento</div>
+        <div id="watch-last-event" class="text-sm font-medium text-gray-900 dark:text-white truncate">
+          {{ watch_status.last_event or '—' }}
+        </div>
+      </div>
+      <div class="bg-gray-50 dark:bg-gray-800 rounded-xl p-4">
+        <div class="text-xs text-gray-500 dark:text-gray-400 mb-1">Eventos procesados</div>
+        <div id="watch-events" class="text-sm font-bold text-indigo-600 dark:text-indigo-400">
+          {{ watch_status.events_processed }}
+        </div>
+      </div>
+      <div class="bg-gray-50 dark:bg-gray-800 rounded-xl p-4">
+        <div class="text-xs text-gray-500 dark:text-gray-400 mb-1">En cola</div>
+        <div id="watch-queue" class="text-sm font-bold text-gray-900 dark:text-white">
+          {{ watch_status.queue_depth }}
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Controls card -->
+  <div class="bg-white dark:bg-gray-900 rounded-2xl border border-gray-200 dark:border-gray-800 p-6">
+    <h2 class="text-lg font-semibold text-gray-900 dark:text-white mb-4">
+      <i class="fa-solid fa-play-circle text-indigo-500 mr-2"></i>Iniciar vigilancia
+    </h2>
+
+    <div class="flex gap-2">
+      <input id="watch-path-input" type="text"
+             placeholder="C:\Users\Raul\Documentos"
+             value="{{ watch_status.folder or '' }}"
+             class="flex-1 px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-700
+                    bg-white dark:bg-gray-800 text-sm text-gray-900 dark:text-white
+                    focus:ring-2 focus:ring-indigo-500 focus:outline-none">
+      <button onclick="browseForFolder()"
+              title="Seleccionar carpeta"
+              class="px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-700
+                     text-sm text-gray-600 dark:text-gray-400
+                     hover:bg-gray-50 dark:hover:bg-gray-800 transition">
+        <i class="fa-solid fa-folder-open"></i>
+      </button>
+      <button id="start-btn" onclick="startWatch()"
+              class="{% if watch_status.running %}hidden {% endif %}px-4 py-2 rounded-lg bg-indigo-600
+                     text-white text-sm font-medium hover:bg-indigo-700 transition flex items-center gap-2">
+        <i class="fa-solid fa-play"></i> Iniciar
+      </button>
+      <button id="stop-btn" onclick="stopWatch()"
+              class="{% if not watch_status.running %}hidden {% endif %}px-4 py-2 rounded-lg bg-red-600
+                     text-white text-sm font-medium hover:bg-red-700 transition flex items-center gap-2">
+        <i class="fa-solid fa-stop"></i> Detener
+      </button>
+    </div>
+  </div>
+
+  <!-- How it works -->
+  <div class="bg-indigo-50 dark:bg-indigo-950 rounded-2xl border border-indigo-200 dark:border-indigo-800 p-5">
+    <h3 class="text-sm font-semibold text-indigo-900 dark:text-indigo-200 mb-3">
+      <i class="fa-solid fa-circle-info mr-1.5"></i>Cómo funciona
+    </h3>
+    <ul class="text-sm text-indigo-800 dark:text-indigo-300 space-y-1.5 list-disc list-inside">
+      <li>Archivos nuevos o modificados se indexan tras <strong>3 segundos</strong> de inactividad (debounce).</li>
+      <li>Los documentos (PDF, DOCX, XLSX…) se analizan con IA mediante Ollama en cola serializada.</li>
+      <li>Los archivos borrados se marcan como desaparecidos; los movidos actualizan su ruta en la BD.</li>
+      <li>Se ignoran automáticamente: archivos temporales (<code>~$*</code>, <code>*.tmp</code>), <code>.git/</code>, cachés de Python.</li>
+      <li>La vigilancia se detiene limpiamente al cerrar la aplicación.</li>
+    </ul>
+  </div>
+
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  let _poll = null;
+
+  async function _refresh() {
+    let s;
+    try {
+      const r = await fetch('/api/watch/status');
+      s = await r.json();
+    } catch {
+      return;
+    }
+
+    const badge    = document.getElementById('watch-badge');
+    const info     = document.getElementById('watch-info');
+    const startBtn = document.getElementById('start-btn');
+    const stopBtn  = document.getElementById('stop-btn');
+
+    if (s.running) {
+      badge.textContent = 'Activo';
+      badge.className = 'text-white text-xs font-semibold px-3 py-1.5 rounded-full bg-emerald-500';
+      info.classList.remove('hidden');
+      startBtn.classList.add('hidden');
+      stopBtn.classList.remove('hidden');
+      document.getElementById('watch-folder').textContent     = s.folder || '—';
+      document.getElementById('watch-last-event').textContent = s.last_event || '—';
+      document.getElementById('watch-events').textContent     = s.events_processed ?? 0;
+      document.getElementById('watch-queue').textContent      = s.queue_depth ?? 0;
+      if (s.folder) document.getElementById('watch-path-input').value = s.folder;
+    } else {
+      badge.textContent = 'Inactivo';
+      badge.className = 'text-white text-xs font-semibold px-3 py-1.5 rounded-full bg-gray-400';
+      info.classList.add('hidden');
+      startBtn.classList.remove('hidden');
+      stopBtn.classList.add('hidden');
+    }
+  }
+
+  async function startWatch() {
+    const path = document.getElementById('watch-path-input').value.trim();
+    if (!path) { showToast('Introduce la ruta a vigilar', 'warning'); return; }
+    try {
+      const r = await fetch('/api/watch/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path }),
+      });
+      const data = await r.json();
+      if (r.ok) {
+        showToast('Vigilancia iniciada ✓', 'success');
+        _refresh();
+      } else {
+        showToast(data.error || 'Error al iniciar', 'error');
+      }
+    } catch (e) {
+      showToast('Error de red', 'error');
+    }
+  }
+
+  async function stopWatch() {
+    await fetch('/api/watch/stop', { method: 'POST' });
+    showToast('Vigilancia detenida', 'info');
+    _refresh();
+  }
+
+  async function browseForFolder() {
+    try {
+      const r = await fetch('/api/browse-folder');
+      const d = await r.json();
+      if (d.path) document.getElementById('watch-path-input').value = d.path;
+    } catch {}
+  }
+
+  // Poll every 3 s while on this page
+  _refresh();
+  _poll = setInterval(_refresh, 3000);
+  window.addEventListener('beforeunload', () => { if (_poll) clearInterval(_poll); });
+</script>
+{% endblock %}
