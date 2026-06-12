@@ -1,13 +1,9 @@
 import json
 import re
 
-import requests
-
 import database
-
-OLLAMA_BASE = "http://localhost:11434/api"
-SQL_MODEL = "qwen2.5-coder:7b"
-RESPONSE_MODEL = "qwen3:8b"
+from config import SQL_MODEL, RESPONSE_MODEL
+from ollama_client import call_ollama, check_ollama, pull_commands
 
 DB_SCHEMA = """
 Tables:
@@ -41,36 +37,6 @@ def safety_check(sql: str) -> bool:
     return True
 
 
-def _check_ollama() -> tuple[bool, list[str]]:
-    """Returns (is_running, installed_model_names)."""
-    try:
-        resp = requests.get("http://localhost:11434/api/tags", timeout=5)
-        models = [m["name"] for m in resp.json().get("models", [])]
-        return True, models
-    except Exception:
-        return False, []
-
-
-def _call_ollama(model: str, prompt: str, timeout: int = 180) -> str:
-    try:
-        resp = requests.post(
-            f"{OLLAMA_BASE}/generate",
-            json={"model": model, "prompt": prompt, "stream": False},
-            timeout=timeout,
-        )
-        resp.raise_for_status()
-        raw = resp.json().get("response", "").strip()
-        # Strip <think>…</think> blocks
-        return re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
-    except requests.exceptions.ConnectionError:
-        raise RuntimeError("ollama_not_running")
-    except Exception as e:
-        err = str(e)
-        if "model" in err.lower() and ("not found" in err.lower() or "pull" in err.lower()):
-            raise RuntimeError("model_not_found")
-        return ""
-
-
 def generate_sql(question: str) -> str:
     tags = database.get_all_etiquetas()
     tags_str = ", ".join(tags) if tags else "none"
@@ -90,8 +56,7 @@ def generate_sql(question: str) -> str:
         "SQL:"
     )
 
-    raw = _call_ollama(SQL_MODEL, prompt)
-    # Strip any accidental code fences
+    raw = call_ollama(SQL_MODEL, prompt)
     raw = raw.replace("```sql", "").replace("```", "").strip().rstrip(";")
     return raw
 
@@ -119,31 +84,30 @@ def _generate_response(question: str, results: list[dict]) -> str:
         "Be concise — summarize key findings, do not list every row.\n\n"
         f"Question: {question}\n\nAnswer:"
     )
-    answer = _call_ollama(RESPONSE_MODEL, prompt)
+    answer = call_ollama(RESPONSE_MODEL, prompt)
     if not answer:
         return f"Encontré {len(results)} resultado(s) para tu consulta."
     return answer
 
 
 def chat_query(question: str) -> dict:
-    # Pre-flight: check Ollama before wasting time
-    running, installed_models = _check_ollama()
-    if not running:
+    # Pre-flight: verify Ollama is running and models are installed
+    status = check_ollama([SQL_MODEL, RESPONSE_MODEL])
+    if not status["running"]:
         return {
             "respuesta": "⚠️ Ollama no está respondiendo. Asegúrate de que Ollama está en ejecución.",
             "resultados": [], "sql": "", "error": "ollama_not_running",
         }
 
-    missing = [m for m in (SQL_MODEL, RESPONSE_MODEL) if not any(m in im for im in installed_models)]
-    if missing:
-        cmds = "\n".join(f"  ollama pull {m}" for m in missing)
+    if status["missing"]:
+        cmds = pull_commands(status["missing"])
         return {
             "respuesta": (
-                f"⚠️ Los modelos de IA no están instalados en Ollama.\n\n"
+                "⚠️ Los modelos de IA no están instalados en Ollama.\n\n"
                 f"Ejecuta estos comandos en tu terminal:\n{cmds}"
             ),
             "resultados": [], "sql": "", "error": "models_not_installed",
-            "missing_models": missing,
+            "missing_models": status["missing"],
         }
 
     try:

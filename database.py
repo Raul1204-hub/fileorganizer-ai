@@ -1,8 +1,7 @@
 import sqlite3
-from pathlib import Path
 from datetime import datetime
 
-DB_PATH = Path(__file__).parent / "data" / "catalogo.db"
+from config import DB_PATH
 
 CATEGORIAS_SEED = [
     (1, "Documentos", "#4F46E5", "📄"),

@@ -5,7 +5,7 @@ import time
 import webbrowser
 from pathlib import Path
 
-import requests
+import ollama_client
 
 # Ensure project root is importable regardless of how this module is loaded
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -548,12 +548,12 @@ def api_open_file(archivo_id):
 @app.route("/api/ollama-status")
 def api_ollama_status():
     """Check Ollama availability and installed models."""
-    try:
-        resp = requests.get("http://localhost:11434/api/tags", timeout=5)
-        models = [m["name"] for m in resp.json().get("models", [])]
-        return jsonify({"running": True, "models": models})
-    except Exception:
-        return jsonify({"running": False, "models": []})
+    status = ollama_client.check_ollama()
+    return jsonify({
+        "running": status["running"],
+        "models": status["installed"],
+        "missing": status["missing"],
+    })
 
 
 # ── Approve / move API ────────────────────────────────────────────────────────

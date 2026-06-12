@@ -4,11 +4,10 @@ import zipfile
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
-import requests
 import pdfplumber
 
-OLLAMA_BASE = "http://localhost:11434/api"
-ANALYSIS_MODEL = "qwen3:8b"
+from config import ANALYSIS_MODEL
+from ollama_client import call_ollama
 
 _DOCX_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 _XLSX_NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
@@ -83,20 +82,7 @@ def extract_text(path: Path, extension: str) -> str:
     return ""
 
 
-# ── Ollama call ───────────────────────────────────────────────────────────────
-
-def call_ollama(model: str, prompt: str, timeout: int = 180) -> str:
-    try:
-        resp = requests.post(
-            f"{OLLAMA_BASE}/generate",
-            json={"model": model, "prompt": prompt, "stream": False},
-            timeout=timeout,
-        )
-        resp.raise_for_status()
-        return resp.json().get("response", "").strip()
-    except Exception:
-        return ""
-
+# ── Ollama analysis ───────────────────────────────────────────────────────────
 
 def analyze_with_ollama(text: str, filename: str) -> dict:
     prompt = (
@@ -108,14 +94,13 @@ def analyze_with_ollama(text: str, filename: str) -> dict:
         '"resumen": "max 2 sentences"}\n\n'
         f"Document content:\n{text[:2500]}"
     )
-    raw = call_ollama(ANALYSIS_MODEL, prompt)
+    try:
+        raw = call_ollama(ANALYSIS_MODEL, prompt)
+    except RuntimeError:
+        return {}
     if not raw:
         return {}
 
-    # Strip <think>…</think> blocks that some qwen3 models emit
-    raw = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
-
-    # Find the first JSON object in the response
     try:
         match = re.search(r"\{.*?\}", raw, re.DOTALL)
         if match:

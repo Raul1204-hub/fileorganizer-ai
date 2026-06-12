@@ -18,6 +18,8 @@ def cli_scan(target_path: str) -> None:
     import scanner
     import analyzer
     import recommendations
+    import ollama_client
+    from config import ANALYSIS_MODEL
 
     print(f"[+] Target: {target_path}")
     database.create_tables()
@@ -142,16 +144,21 @@ def cli_scan(target_path: str) -> None:
             else:
                 to_analyze[f["ruta_actual"]] = f["db_id"]
 
-    # ── Analyse only new/modified documents without a cached resumen ──────────
-    doc_exts = {".pdf", ".docx", ".doc", ".txt", ".odt", ".xlsx", ".csv"}
-    docs_to_analyze = {
-        ruta: aid for ruta, aid in to_analyze.items()
-        if Path(ruta).suffix.lower() in doc_exts
-    }
-    print(f"[+] Analysing {len(docs_to_analyze)} document(s) with Ollama…")
+    # ── Ollama pre-flight before document analysis ────────────────────────────
+    print(f"[+] Analysing {len(to_analyze)} document(s) with Ollama ({ANALYSIS_MODEL})…")
+    if to_analyze:
+        preflight = ollama_client.check_ollama([ANALYSIS_MODEL])
+        if not preflight["running"]:
+            print("[!] Ollama is not running — skipping analysis.")
+            print("    Start Ollama and re-run the scan to analyze documents.")
+            to_analyze.clear()
+        elif preflight["missing"]:
+            cmds = ollama_client.pull_commands(preflight["missing"])
+            print(f"[!] Model not installed — skipping analysis. Run:\n{cmds}")
+            to_analyze.clear()
 
-    for i, (ruta, aid) in enumerate(docs_to_analyze.items(), 1):
-        print(f"\r  [{i}/{len(docs_to_analyze)}] {Path(ruta).name[:60]}", end="", flush=True)
+    for i, (ruta, aid) in enumerate(to_analyze.items(), 1):
+        print(f"\r  [{i}/{len(to_analyze)}] {Path(ruta).name[:60]}", end="", flush=True)
         result = analyzer.analyze_file(Path(ruta), Path(ruta).suffix.lower())
         if result:
             cat_id = scanner.CATEGORIA_IDS.get(result.get("categoria", ""), None)
@@ -160,7 +167,7 @@ def cli_scan(target_path: str) -> None:
                 if tag:
                     database.insert_etiqueta(aid, str(tag))
 
-    if docs_to_analyze:
+    if to_analyze:
         print()
     print("[+] Analysis complete")
 
