@@ -271,6 +271,16 @@ def api_browse_folder():
         "$d.ShowNewFolderButton = $true; "
         "if ($d.ShowDialog() -eq 'OK') { Write-Output $d.SelectedPath }"
     )
+    script = (
+        "Add-Type -AssemblyName System.Windows.Forms; "
+        "$form = New-Object System.Windows.Forms.Form; "
+        "$form.TopMost = $true; $form.Show(); $form.Hide(); "
+        "$d = New-Object System.Windows.Forms.FolderBrowserDialog; "
+        "$d.Description = 'Seleccionar carpeta para escanear'; "
+        "$d.ShowNewFolderButton = $true; "
+        "if ($d.ShowDialog($form) -eq 'OK') { Write-Output $d.SelectedPath }; "
+        "$form.Dispose()"
+    )
     try:
         result = subprocess.run(
             ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
