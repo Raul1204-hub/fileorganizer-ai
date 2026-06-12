@@ -8,7 +8,7 @@ import requests
 import pdfplumber
 
 OLLAMA_BASE = "http://localhost:11434/api"
-ANALYSIS_MODEL = "qwen3:30b"
+ANALYSIS_MODEL = "qwen3:8b"
 
 _DOCX_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 _XLSX_NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"

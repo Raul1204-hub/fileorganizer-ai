@@ -6,8 +6,8 @@ import requests
 import database
 
 OLLAMA_BASE = "http://localhost:11434/api"
-SQL_MODEL = "qooba/qwen3-coder-30b-a3b-instruct"
-RESPONSE_MODEL = "qwen3:30b"
+SQL_MODEL = "qwen2.5-coder:7b"
+RESPONSE_MODEL = "qwen3:8b"
 
 DB_SCHEMA = """
 Tables:
