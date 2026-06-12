@@ -125,6 +125,13 @@ def create_tables():
             revertido       INTEGER DEFAULT 0,
             fecha_reversion TEXT
         );
+
+        CREATE TABLE IF NOT EXISTS embeddings (
+            archivo_id      INTEGER PRIMARY KEY REFERENCES archivos(id),
+            vector          BLOB NOT NULL,
+            dim             INTEGER NOT NULL DEFAULT 0,
+            fecha_embedding TEXT
+        );
     """)
     for cat_id, nombre, color, icono in CATEGORIAS_SEED:
         cur.execute(
@@ -342,6 +349,60 @@ def mark_archivos_bajo_ruta_desaparecidos(prefix: str) -> int:
         conn.commit()
     conn.close()
     return count
+
+
+# ── embeddings ────────────────────────────────────────────────────────────────
+
+
+def upsert_embedding(archivo_id: int, vector: bytes, dim: int = 0) -> None:
+    """Insert or replace the embedding vector for a file."""
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        """INSERT INTO embeddings (archivo_id, vector, dim, fecha_embedding)
+           VALUES (?, ?, ?, ?)
+           ON CONFLICT(archivo_id) DO UPDATE SET
+               vector = excluded.vector,
+               dim = excluded.dim,
+               fecha_embedding = excluded.fecha_embedding""",
+        (archivo_id, vector, dim, datetime.now().isoformat()),
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_all_embeddings() -> list[dict]:
+    """Return all stored embedding rows as list of {archivo_id, vector: bytes}."""
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT archivo_id, vector FROM embeddings")
+    rows = cur.fetchall()
+    conn.close()
+    return [{"archivo_id": r["archivo_id"], "vector": bytes(r["vector"])} for r in rows]
+
+
+def delete_embedding(archivo_id: int) -> None:
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("DELETE FROM embeddings WHERE archivo_id = ?", (archivo_id,))
+    conn.commit()
+    conn.close()
+
+
+def get_archivos_sin_embedding() -> list[dict]:
+    """Return analyzed files that still lack an embedding (for backfill)."""
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        """SELECT a.id, a.nombre, a.resumen_ia
+           FROM archivos a
+           WHERE a.resumen_ia IS NOT NULL AND a.existe = 1
+             AND a.id NOT IN (SELECT archivo_id FROM embeddings)
+           ORDER BY a.fecha_indexado DESC"""
+    )
+    rows = cur.fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
 
 
 def update_archivo_full(

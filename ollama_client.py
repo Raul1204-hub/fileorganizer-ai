@@ -11,13 +11,13 @@ import time
 
 import requests
 
-from config import ANALYSIS_MODEL, OLLAMA_BASE, OLLAMA_TIMEOUT, RESPONSE_MODEL, SQL_MODEL
+from config import ANALYSIS_MODEL, EMBED_MODEL, OLLAMA_BASE, OLLAMA_TIMEOUT, RESPONSE_MODEL, SQL_MODEL
 from log import get_logger
 
 logger = get_logger("fileorganizer.ollama")
 
 # All models the application uses, in priority order (de-duplicated)
-REQUIRED_MODELS: list[str] = list(dict.fromkeys([SQL_MODEL, RESPONSE_MODEL, ANALYSIS_MODEL]))
+REQUIRED_MODELS: list[str] = list(dict.fromkeys([SQL_MODEL, RESPONSE_MODEL, ANALYSIS_MODEL, EMBED_MODEL]))
 
 
 def call_ollama(
@@ -86,6 +86,30 @@ def check_ollama(required: list[str] | None = None) -> dict:
 
     missing = [m for m in required if not any(m in im for im in installed)]
     return {"running": True, "installed": installed, "missing": missing}
+
+
+def embed_text(text: str, model: str | None = None, timeout: int = 30) -> list[float]:
+    """Generate an embedding vector via Ollama POST /api/embed.
+
+    Returns an empty list on any failure — never raises.
+    The response format is {"embeddings": [[float, ...], ...]}.
+    """
+    model = model or EMBED_MODEL
+    payload = {"model": model, "input": text}
+    t0 = time.monotonic()
+    try:
+        resp = requests.post(f"{OLLAMA_BASE}/embed", json=payload, timeout=timeout)
+        resp.raise_for_status()
+        data = resp.json()
+        embeddings = data.get("embeddings", [])
+        if embeddings and isinstance(embeddings[0], list):
+            vec: list[float] = embeddings[0]
+            logger.debug("embed | model=%s | dim=%d | %.2fs", model, len(vec), time.monotonic() - t0)
+            return vec
+        return []
+    except Exception as exc:
+        logger.warning("embed | model=%s | %.2fs | %s", model, time.monotonic() - t0, exc)
+        return []
 
 
 def pull_commands(missing: list[str]) -> str:

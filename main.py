@@ -1,10 +1,11 @@
 """FileOrganizer AI — entry point.
 
 Usage:
-  python main.py            → start web UI (default)
-  python main.py web        → start web UI
-  python main.py scan PATH  → scan directory via CLI (no web server)
-  python main.py watch PATH → watch directory for changes (CLI mode)
+  python main.py                    → start web UI (default)
+  python main.py web                → start web UI
+  python main.py scan PATH          → scan directory via CLI
+  python main.py watch PATH         → watch directory for changes (CLI mode)
+  python main.py reindex-embeddings → backfill embeddings for analyzed files
 """
 
 import argparse
@@ -216,6 +217,43 @@ Done. Start the web UI with: python main.py
 """)
 
 
+def cli_reindex_embeddings() -> None:
+    """Generate embeddings for all analyzed files that currently lack one."""
+    _log.setup_logging()
+    import embeddings as emb
+    import ollama_client
+    from config import EMBED_MODEL
+
+    database.create_tables()
+
+    preflight = ollama_client.check_ollama([EMBED_MODEL])
+    if not preflight["running"]:
+        print("[!] Ollama is not running — start it and retry", file=sys.stderr)
+        sys.exit(1)
+    if preflight["missing"]:
+        cmds = ollama_client.pull_commands(preflight["missing"])
+        print(f"[!] Embed model not installed. Run:\n{cmds}", file=sys.stderr)
+        sys.exit(1)
+
+    archivos = database.get_archivos_sin_embedding()
+    print(f"[+] Files needing embeddings: {len(archivos)}")
+    if not archivos:
+        print("[+] Nothing to do.")
+        return
+
+    ok = fail = 0
+    for i, archivo in enumerate(archivos, 1):
+        etiquetas = database.get_etiquetas_by_archivo(archivo["id"])
+        text = emb.build_embed_text(archivo["nombre"], etiquetas, archivo.get("resumen_ia", "") or "")
+        print(f"\r  [{i}/{len(archivos)}] {archivo['nombre'][:60]}", end="", flush=True)
+        if emb.index_archivo(archivo["id"], text):
+            ok += 1
+        else:
+            fail += 1
+
+    print(f"\n[+] Done — {ok} indexed, {fail} failed")
+
+
 def cli_watch(target_path: str) -> None:
     """Watch a directory for filesystem changes and index them automatically."""
     _log.setup_logging()
@@ -254,6 +292,11 @@ def main() -> None:
     watch_p = subparsers.add_parser("watch", help="Watch a directory for changes (CLI mode)")
     watch_p.add_argument("path", help="Path to the directory to watch")
 
+    subparsers.add_parser(
+        "reindex-embeddings",
+        help="Generate embeddings for already-analyzed files (backfill)",
+    )
+
     args = parser.parse_args()
 
     if args.command == "scan":
@@ -261,6 +304,8 @@ def main() -> None:
             print(f"[!] Path does not exist: {args.path}", file=sys.stderr)
             sys.exit(1)
         cli_scan(args.path)
+    elif args.command == "reindex-embeddings":
+        cli_reindex_embeddings()
     elif args.command == "watch":
         if not Path(args.path).is_dir():
             print(f"[!] Path does not exist or is not a directory: {args.path}", file=sys.stderr)

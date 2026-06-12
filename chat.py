@@ -4,7 +4,8 @@ import sqlite3
 import threading
 
 import database
-from config import RESPONSE_MODEL, SQL_MODEL
+import embeddings as _emb
+from config import EMBED_MODEL, RESPONSE_MODEL, SQL_MODEL
 from ollama_client import call_ollama, check_ollama, pull_commands
 
 DB_SCHEMA = """
@@ -35,6 +36,50 @@ _BLOCKED = re.compile(
 
 _QUERY_LIMIT = 200  # max rows returned by the chat query engine
 _QUERY_TIMEOUT_S = 30  # seconds before conn.interrupt() fires
+
+
+# ── Intent routing ────────────────────────────────────────────────────────────
+
+# Fast heuristic patterns — avoid an Ollama round-trip for obvious cases
+_SEMANTIC_RE = re.compile(
+    r"\b(sobre|acerca\s+de|relacionad[ao]s?\s+con|que\s+trat[ae]n?|que\s+habl[ae]n?|"
+    r"de\s+tema|contenid[oa]|busca(?:r)?\s+archivos|archivo[s]?\s+(?:sobre|acerca)|"
+    r"documentos?\s+sobre|similar(?:es)?\s+a|que\s+mencione?n?|hablan?\s+de)\b",
+    re.IGNORECASE,
+)
+_SQL_RE = re.compile(
+    r"\b(cu[aá]ntos?|total\s+de|m[aá]s\s+grande|m[aá]s\s+(?:reciente|pesado)|"
+    r"extensi[oó]n|categor[ií]a|cu[aá]ndo|promedio|suma|lista\s+de|muestra|"
+    r"muéstrame|dame\s+(?:los|un\s+listado)|ordenad[oa]s?\s+por)\b",
+    re.IGNORECASE,
+)
+
+
+def _classify_intent(question: str) -> str:
+    """Return 'semantica' or 'sql' for the question.
+
+    Uses fast regex heuristics first; falls back to a short RESPONSE_MODEL call
+    only when the heuristics are inconclusive.  Defaults to 'sql' on any error.
+    """
+    if _SEMANTIC_RE.search(question):
+        return "semantica"
+    if _SQL_RE.search(question):
+        return "sql"
+    # Uncertain — ask the model for a quick single-word classification
+    prompt = (
+        "Clasifica la pregunta en UNA categoría:\n"
+        '"semantica" → busca archivos por contenido, tema o descripción\n'
+        '"sql"       → pide estadísticas, fechas, tamaños, conteos o listados técnicos\n\n'
+        f'Pregunta: "{question}"\n'
+        "Categoría (escribe solo la palabra):"
+    )
+    try:
+        raw = call_ollama(RESPONSE_MODEL, prompt, timeout=15)
+        if "semant" in raw.lower():
+            return "semantica"
+    except Exception:
+        pass
+    return "sql"
 
 
 def safety_check(sql: str) -> bool:
@@ -130,7 +175,7 @@ def _generate_response(question: str, results: list[dict]) -> str:
 
 
 def chat_query(question: str) -> dict:
-    # Pre-flight: verify Ollama is running and models are installed
+    # ── Pre-flight: Ollama running + core models present ─────────────────────
     status = check_ollama([SQL_MODEL, RESPONSE_MODEL])
     if not status["running"]:
         return {
@@ -139,7 +184,6 @@ def chat_query(question: str) -> dict:
             "sql": "",
             "error": "ollama_not_running",
         }
-
     if status["missing"]:
         cmds = pull_commands(status["missing"])
         return {
@@ -153,6 +197,34 @@ def chat_query(question: str) -> dict:
             "missing_models": status["missing"],
         }
 
+    # ── Intent routing ────────────────────────────────────────────────────────
+    intent = _classify_intent(question)
+
+    if intent == "semantica":
+        embed_status = check_ollama([EMBED_MODEL])
+        if embed_status["running"] and not embed_status["missing"]:
+            results = _emb.semantic_search(question)
+            if results:
+                top_names = ", ".join(r["nombre"] for r in results[:3])
+                respuesta = (
+                    f"Encontré **{len(results)}** archivo(s) relacionados con «{question}».\n"
+                    f"Los más relevantes: {top_names}."
+                )
+            else:
+                respuesta = (
+                    f"No encontré archivos indexados con contenido relacionado a «{question}». "
+                    "Asegúrate de haber escaneado y analizado los documentos primero."
+                )
+            database.insert_chat_historial(question, "[búsqueda semántica]", respuesta)
+            return {
+                "respuesta": respuesta,
+                "resultados": results,
+                "sql": "[búsqueda semántica]",
+                "modo": "semantica",
+            }
+        # Embed model unavailable → fall through to SQL
+
+    # ── Text-to-SQL path ──────────────────────────────────────────────────────
     try:
         sql = generate_sql(question)
     except RuntimeError as e:
@@ -185,4 +257,5 @@ def chat_query(question: str) -> dict:
         "respuesta": respuesta,
         "resultados": resultados[:50],
         "sql": sql,
+        "modo": "sql",
     }

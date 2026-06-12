@@ -21,10 +21,12 @@ from flask import Flask, Response, jsonify, render_template, request, stream_wit
 import analyzer
 import chat as chat_module
 import database
+import embeddings as _embed_module
 import organizer
 import recommendations
 import scanner
 import watcher as _watcher_module
+from config import EMBED_MODEL
 
 app = Flask(__name__, template_folder="templates")
 app.secret_key = "fileorganizer-ai-secret-2024"
@@ -406,7 +408,12 @@ def _run_scan(target_path: str):
                     to_analyze[f["ruta_actual"]] = f["db_id"]
 
         # ── Analysis phase (Ollama, weighted EMA) ─────────────────────────────
-        # to_analyze already contains only doc-extension files
+        # Check embed model once before the loop; missing it is non-fatal
+        _embed_check = ollama_client.check_ollama([EMBED_MODEL])
+        _embed_available = _embed_check["running"] and not _embed_check["missing"]
+        if not _embed_available:
+            _wlog.warning("embed model '%s' not available — embeddings skipped this scan", EMBED_MODEL)
+
         with _lock:
             _ss.fase = "analizando"
             _ss.hechos = 0
@@ -452,9 +459,19 @@ def _run_scan(target_path: str):
             if result:
                 cat_id = scanner.CATEGORIA_IDS.get(result.get("categoria", ""), None)
                 database.update_archivo_resumen(aid, result.get("resumen", ""), cat_id)
+                etiquetas_result: list[str] = []
                 for tag in result.get("etiquetas", []):
                     if tag:
                         database.insert_etiqueta(aid, str(tag))
+                        etiquetas_result.append(str(tag))
+                # Generate and store embedding (non-fatal if embed model absent)
+                if _embed_available:
+                    try:
+                        _embed_module.index_archivo_from_result(
+                            aid, Path(ruta).name, etiquetas_result, result.get("resumen", "")
+                        )
+                    except Exception as _exc:
+                        _wlog.warning("embed_failed | %s | %s", Path(ruta).name, _exc)
 
         # ── Recommendations phase ─────────────────────────────────────────────
         if not _ss.cancelled:
@@ -706,6 +723,22 @@ def api_archivos():
     categoria_id = int(raw_cat) if raw_cat.isdigit() else None
     archivos = database.get_all_archivos(search=search, categoria_id=categoria_id)
     return jsonify(archivos)
+
+
+# ── Semantic search ───────────────────────────────────────────────────────────
+
+
+@app.route("/api/search/semantic")
+def api_search_semantic():
+    q = request.args.get("q", "").strip()
+    if not q:
+        return jsonify({"error": "Parámetro q requerido"}), 400
+    try:
+        results = _embed_module.semantic_search(q)
+        return jsonify({"query": q, "results": results, "total": len(results)})
+    except Exception as exc:
+        _wlog.warning("semantic_search | %s | %s", q[:60], exc)
+        return jsonify({"error": str(exc)}), 500
 
 
 # ── Vigilancia (watch) ────────────────────────────────────────────────────────

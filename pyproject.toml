@@ -12,7 +12,7 @@ ignore = [
 
 [tool.ruff.lint.isort]
 known-first-party = [
-    "analyzer", "chat", "config", "database", "log",
+    "analyzer", "chat", "config", "database", "embeddings", "log",
     "main", "ollama_client", "organizer", "recommendations", "scanner", "watcher",
 ]
 

@@ -20,6 +20,7 @@ from pathlib import Path
 
 import analyzer
 import database
+import embeddings as _embed_module
 import scanner
 from log import get_logger
 
@@ -383,9 +384,18 @@ class WatcherManager:
             result.pop("_text_len", None)
             cat_id = scanner.CATEGORIA_IDS.get(result.get("categoria", ""), None)
             database.update_archivo_resumen(archivo_id, result.get("resumen", ""), cat_id)
+            etiquetas_result: list[str] = []
             for tag in result.get("etiquetas", []):
                 if tag:
                     database.insert_etiqueta(archivo_id, str(tag))
+                    etiquetas_result.append(str(tag))
+            # Generate embedding (non-fatal)
+            try:
+                _embed_module.index_archivo_from_result(
+                    archivo_id, p.name, etiquetas_result, result.get("resumen", "")
+                )
+            except Exception as _exc:
+                logger.warning("watcher | embed_failed | %s | %s", p.name, _exc)
             logger.info("watcher | analyzed | %s", p.name)
             self._record_event(f"Analizado: {p.name}")
 

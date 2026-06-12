@@ -4,6 +4,23 @@
 
 {% block content %}
 
+<!-- ── Tabs ────────────────────────────────────────────────────────────────── -->
+<div class="flex gap-1 mb-5 bg-gray-100 dark:bg-gray-800 p-1 rounded-xl w-fit">
+  <button id="tab-explorador"
+          onclick="switchTab('explorador')"
+          class="tab-btn px-4 py-2 text-sm font-medium rounded-lg transition">
+    <i class="fa-solid fa-table-list mr-1.5"></i>Explorador
+  </button>
+  <button id="tab-semantica"
+          onclick="switchTab('semantica')"
+          class="tab-btn px-4 py-2 text-sm font-medium rounded-lg transition">
+    <i class="fa-solid fa-brain mr-1.5"></i>Búsqueda inteligente
+  </button>
+</div>
+
+<!-- ── Panel: Explorador ───────────────────────────────────────────────────── -->
+<div id="panel-explorador">
+
 <!-- ── Filtros ─────────────────────────────────────────────────────────────── -->
 <form method="GET" action="/explorar" id="filter-form">
   <div class="flex flex-wrap items-center gap-3 mb-5">
@@ -157,11 +174,84 @@
   </div>
   {% endif %}
 
-</div>
+</div><!-- end panel-explorador -->
+
+</div><!-- end #panel-explorador -->
+
+<!-- ── Panel: Búsqueda inteligente ────────────────────────────────────────── -->
+<div id="panel-semantica" class="hidden space-y-5">
+
+  <!-- Search bar -->
+  <div class="bg-white dark:bg-gray-900 rounded-2xl border border-gray-200 dark:border-gray-800 p-5">
+    <h2 class="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-3">
+      <i class="fa-solid fa-magnifying-glass-chart text-indigo-500 mr-1.5"></i>Búsqueda por contenido y significado
+    </h2>
+    <div class="flex gap-2">
+      <input id="sem-input" type="text"
+             placeholder="archivos sobre contratos de alquiler…"
+             class="flex-1 px-4 py-2.5 text-sm border border-gray-200 dark:border-gray-700 rounded-xl
+                    bg-white dark:bg-gray-900 focus:outline-none focus:ring-2 focus:ring-indigo-400
+                    dark:text-gray-200"
+             onkeydown="if(event.key==='Enter') semSearch()">
+      <button onclick="semSearch()"
+              class="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-semibold rounded-xl transition flex items-center gap-2">
+        <i class="fa-solid fa-brain"></i> Buscar
+      </button>
+    </div>
+    <p class="text-xs text-gray-400 dark:text-gray-500 mt-2">
+      Usa frases descriptivas. La IA compara el significado, no las palabras exactas.
+      Requiere modelo <code>nomic-embed-text</code> en Ollama.
+    </p>
+  </div>
+
+  <!-- Loading / Empty / Error states -->
+  <div id="sem-loading" class="hidden text-center py-12 text-gray-400">
+    <i class="fa-solid fa-spinner fa-spin text-3xl mb-3 block text-indigo-400"></i>
+    <span class="text-sm">Buscando por similitud semántica…</span>
+  </div>
+  <div id="sem-empty" class="hidden text-center py-12 text-gray-400">
+    <i class="fa-solid fa-face-frown text-3xl mb-3 block opacity-30"></i>
+    <span class="text-sm">No se encontraron archivos relacionados.</span>
+  </div>
+  <div id="sem-error" class="hidden bg-red-50 dark:bg-red-950 border border-red-200 dark:border-red-800 rounded-xl p-4 text-sm text-red-700 dark:text-red-300"></div>
+
+  <!-- Results header -->
+  <div id="sem-header" class="hidden flex items-center justify-between px-1">
+    <span id="sem-count" class="text-sm text-gray-500"></span>
+    <span class="text-xs text-gray-400">Ordenados por similitud ↓</span>
+  </div>
+
+  <!-- Results grid -->
+  <div id="sem-results" class="grid grid-cols-1 gap-3"></div>
+
+</div><!-- end panel-semantica -->
+
 {% endblock %}
 
 {% block scripts %}
 <script>
+  // ── Tab switching ───────────────────────────────────────────────────────────
+  function switchTab(tab) {
+    const active = 'bg-white dark:bg-gray-900 text-gray-900 dark:text-white shadow-sm';
+    const inactive = 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200';
+    ['explorador', 'semantica'].forEach(t => {
+      const btn = document.getElementById('tab-' + t);
+      const panel = document.getElementById('panel-' + t);
+      if (t === tab) {
+        btn.className = btn.className.replace(/tab-btn.*/, '') + 'tab-btn px-4 py-2 text-sm font-medium rounded-lg transition ' + active;
+        panel.classList.remove('hidden');
+      } else {
+        btn.className = btn.className.replace(/tab-btn.*/, '') + 'tab-btn px-4 py-2 text-sm font-medium rounded-lg transition ' + inactive;
+        panel.classList.add('hidden');
+      }
+    });
+    history.replaceState(null, '', tab === 'semantica' ? '#inteligente' : '#explorador');
+  }
+
+  // Restore tab from URL hash
+  switchTab(location.hash === '#inteligente' ? 'semantica' : 'explorador');
+
+  // ── File actions ────────────────────────────────────────────────────────────
   function openFile(id) {
     fetch(`/api/open-file/${id}`)
       .then(r => r.json())
@@ -171,6 +261,91 @@
     fetch(`/api/open-location/${id}`)
       .then(r => r.json())
       .then(d => { if (d.error) showToast(d.error, 'error'); });
+  }
+
+  // ── Semantic search ─────────────────────────────────────────────────────────
+  async function semSearch() {
+    const q = document.getElementById('sem-input').value.trim();
+    if (!q) return;
+
+    document.getElementById('sem-loading').classList.remove('hidden');
+    document.getElementById('sem-empty').classList.add('hidden');
+    document.getElementById('sem-error').classList.add('hidden');
+    document.getElementById('sem-header').classList.add('hidden');
+    document.getElementById('sem-results').innerHTML = '';
+
+    let data;
+    try {
+      const r = await fetch('/api/search/semantic?q=' + encodeURIComponent(q));
+      data = await r.json();
+      if (!r.ok) throw new Error(data.error || 'Error del servidor');
+    } catch (e) {
+      document.getElementById('sem-loading').classList.add('hidden');
+      const errEl = document.getElementById('sem-error');
+      errEl.textContent = '⚠️ ' + e.message;
+      errEl.classList.remove('hidden');
+      return;
+    }
+
+    document.getElementById('sem-loading').classList.add('hidden');
+
+    if (!data.results || data.results.length === 0) {
+      document.getElementById('sem-empty').classList.remove('hidden');
+      return;
+    }
+
+    document.getElementById('sem-count').textContent =
+      data.total + ' resultado(s) para «' + q + '»';
+    document.getElementById('sem-header').classList.remove('hidden');
+
+    const grid = document.getElementById('sem-results');
+    data.results.forEach(f => {
+      const score = Math.round((f.score || 0) * 100);
+      const scoreColor = score >= 70 ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900 dark:text-emerald-300'
+                       : score >= 55 ? 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900 dark:text-indigo-300'
+                       : 'bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-300';
+      const tags = (f.etiquetas || []).slice(0, 5)
+        .map(t => `<span class="text-xs bg-indigo-50 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 px-2 py-0.5 rounded-full">#${t}</span>`)
+        .join('');
+      const catBadge = f.categoria_color
+        ? `<span class="badge text-white text-xs" style="background:${f.categoria_color}">${f.categoria_icono || ''} ${f.categoria_nombre || ''}</span>`
+        : '';
+
+      grid.insertAdjacentHTML('beforeend', `
+        <div class="bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 p-4 hover:border-indigo-300 dark:hover:border-indigo-700 transition">
+          <div class="flex items-start justify-between gap-3 mb-2">
+            <div class="min-w-0 flex-1">
+              <a href="/archivo/${f.id}" class="font-medium text-gray-900 dark:text-white hover:text-indigo-600 dark:hover:text-indigo-400 text-sm truncate block">${f.nombre}</a>
+              <div class="text-xs text-gray-400 font-mono truncate mt-0.5">${f.ruta_actual || ''}</div>
+            </div>
+            <div class="flex items-center gap-2 shrink-0">
+              <span class="text-xs font-bold px-2 py-0.5 rounded-full ${scoreColor}">${score}%</span>
+              ${catBadge}
+            </div>
+          </div>
+          ${f.resumen_ia ? `<p class="text-sm text-gray-500 dark:text-gray-400 line-clamp-2 mb-2">${f.resumen_ia}</p>` : ''}
+          ${tags ? `<div class="flex flex-wrap gap-1">${tags}</div>` : ''}
+          <div class="flex gap-2 mt-3">
+            <a href="/archivo/${f.id}" class="text-xs text-indigo-600 hover:text-indigo-800 dark:text-indigo-400 font-medium">
+              Ver <i class="fa-solid fa-arrow-right ml-0.5"></i>
+            </a>
+            <button onclick="openFile(${f.id})" class="text-xs text-gray-400 hover:text-indigo-600 px-2 py-0.5 rounded hover:bg-indigo-50 dark:hover:bg-gray-800 transition">
+              <i class="fa-solid fa-up-right-from-square"></i>
+            </button>
+            <button onclick="openLocation(${f.id})" class="text-xs text-gray-400 hover:text-amber-600 px-2 py-0.5 rounded hover:bg-amber-50 dark:hover:bg-gray-800 transition">
+              <i class="fa-solid fa-folder-open"></i>
+            </button>
+          </div>
+        </div>`);
+    });
+  }
+
+  // Auto-search if there's a pre-filled query (e.g. coming from chat)
+  const _initQ = new URLSearchParams(location.search).get('sem');
+  if (_initQ) {
+    switchTab('semantica');
+    document.getElementById('sem-input').value = _initQ;
+    semSearch();
   }
 </script>
 {% endblock %}
