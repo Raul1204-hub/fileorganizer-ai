@@ -131,9 +131,13 @@
     <div class="bg-white dark:bg-gray-900 rounded-2xl p-5 shadow-sm border border-gray-100 dark:border-gray-800">
       <h2 class="font-semibold text-sm text-gray-700 dark:text-gray-300 mb-3">Acciones</h2>
       <div class="space-y-2">
+        <button onclick="openFile()"
+                class="w-full flex items-center gap-3 px-4 py-2.5 rounded-xl border border-gray-200 dark:border-gray-700 text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800 transition">
+          <i class="fa-solid fa-up-right-from-square text-indigo-500 w-4 text-center"></i> Abrir archivo
+        </button>
         <button onclick="openFolder()"
                 class="w-full flex items-center gap-3 px-4 py-2.5 rounded-xl border border-gray-200 dark:border-gray-700 text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800 transition">
-          <i class="fa-solid fa-folder-open text-amber-500 w-4 text-center"></i> Abrir carpeta
+          <i class="fa-solid fa-folder-open text-amber-500 w-4 text-center"></i> Mostrar en explorador
         </button>
         <a href="/chat" class="w-full flex items-center gap-3 px-4 py-2.5 rounded-xl border border-gray-200 dark:border-gray-700 text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800 transition">
           <i class="fa-solid fa-comments text-violet-500 w-4 text-center"></i> Buscar con Chat IA
@@ -171,9 +175,18 @@
 
 {% block scripts %}
 <script>
+  const ARCHIVO_ID = {{ archivo.id }};
+
+  function openFile() {
+    fetch(`/api/open-file/${ARCHIVO_ID}`)
+      .then(r => r.json())
+      .then(d => { if (d.error) showToast(d.error, 'error'); });
+  }
+
   function openFolder() {
-    const path = {{ archivo.ruta_actual | tojson }};
-    showToast('Usa tu explorador de archivos para abrir: ' + path, 'info');
+    fetch(`/api/open-location/${ARCHIVO_ID}`)
+      .then(r => r.json())
+      .then(d => { if (d.error) showToast(d.error, 'error'); });
   }
 </script>
 {% endblock %}

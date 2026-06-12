@@ -299,6 +299,34 @@ def api_browse_folder():
     return jsonify({"path": folder})
 
 
+@app.route("/api/open-location/<int:archivo_id>")
+def api_open_location(archivo_id):
+    """Open Windows Explorer with the file highlighted."""
+    import subprocess
+    archivo = database.get_archivo(archivo_id)
+    if not archivo:
+        return jsonify({"error": "Archivo no encontrado"}), 404
+    path = Path(archivo["ruta_actual"])
+    if not path.exists():
+        return jsonify({"error": f"El archivo no existe en: {path}"}), 404
+    subprocess.Popen(["explorer", "/select,", str(path)])
+    return jsonify({"success": True})
+
+
+@app.route("/api/open-file/<int:archivo_id>")
+def api_open_file(archivo_id):
+    """Open the file with its default Windows application."""
+    import os
+    archivo = database.get_archivo(archivo_id)
+    if not archivo:
+        return jsonify({"error": "Archivo no encontrado"}), 404
+    path = Path(archivo["ruta_actual"])
+    if not path.exists():
+        return jsonify({"error": f"El archivo no existe en: {path}"}), 404
+    os.startfile(str(path))
+    return jsonify({"success": True})
+
+
 @app.route("/api/ollama-status")
 def api_ollama_status():
     """Check Ollama availability and installed models."""

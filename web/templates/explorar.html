@@ -67,7 +67,7 @@
           <th class="text-left px-4 py-3 text-xs font-semibold text-gray-400 uppercase tracking-wide">Tamaño</th>
           <th class="text-left px-4 py-3 text-xs font-semibold text-gray-400 uppercase tracking-wide">Modificado</th>
           <th class="text-left px-4 py-3 text-xs font-semibold text-gray-400 uppercase tracking-wide">Resumen IA</th>
-          <th class="px-4 py-3"></th>
+          <th class="px-4 py-3 text-xs font-semibold text-gray-400 uppercase tracking-wide">Acciones</th>
         </tr>
       </thead>
       <tbody>
@@ -104,10 +104,20 @@
             {% endif %}
           </td>
           <td class="px-4 py-3 whitespace-nowrap">
-            <a href="/archivo/{{ a.id }}"
-               class="text-indigo-600 hover:text-indigo-800 dark:text-indigo-400 text-xs font-medium">
-              Ver <i class="fa-solid fa-arrow-right ml-0.5"></i>
-            </a>
+            <div class="flex items-center gap-2">
+              <a href="/archivo/{{ a.id }}"
+                 class="text-indigo-600 hover:text-indigo-800 dark:text-indigo-400 text-xs font-medium">
+                Ver <i class="fa-solid fa-arrow-right ml-0.5"></i>
+              </a>
+              <button onclick="openFile({{ a.id }})" title="Abrir archivo"
+                      class="p-1.5 rounded-lg text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 dark:hover:bg-gray-800 transition">
+                <i class="fa-solid fa-up-right-from-square text-xs"></i>
+              </button>
+              <button onclick="openLocation({{ a.id }})" title="Mostrar en explorador"
+                      class="p-1.5 rounded-lg text-gray-400 hover:text-amber-600 hover:bg-amber-50 dark:hover:bg-gray-800 transition">
+                <i class="fa-solid fa-folder-open text-xs"></i>
+              </button>
+            </div>
           </td>
         </tr>
         {% else %}
@@ -148,4 +158,19 @@
   {% endif %}
 
 </div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  function openFile(id) {
+    fetch(`/api/open-file/${id}`)
+      .then(r => r.json())
+      .then(d => { if (d.error) showToast(d.error, 'error'); });
+  }
+  function openLocation(id) {
+    fetch(`/api/open-location/${id}`)
+      .then(r => r.json())
+      .then(d => { if (d.error) showToast(d.error, 'error'); });
+  }
+</script>
 {% endblock %}
