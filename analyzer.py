@@ -1,8 +1,7 @@
 import json
 import re
-import time
-import zipfile
 import xml.etree.ElementTree as ET
+import zipfile
 from pathlib import Path
 from typing import Callable
 
@@ -19,17 +18,26 @@ _DOCX_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 
 # ── Validation constants ──────────────────────────────────────────────────────
 
-_VALID_CATEGORIAS = frozenset({
-    "Documentos", "Imágenes", "Audio", "Vídeo", "Código",
-    "Datos", "Comprimidos", "Programas", "Desconocido",
-})
+_VALID_CATEGORIAS = frozenset(
+    {
+        "Documentos",
+        "Imágenes",
+        "Audio",
+        "Vídeo",
+        "Código",
+        "Datos",
+        "Comprimidos",
+        "Programas",
+        "Desconocido",
+    }
+)
 
 _ANALYSIS_SCHEMA = {
     "type": "object",
     "properties": {
-        "categoria":  {"type": "string"},
-        "etiquetas":  {"type": "array", "items": {"type": "string"}},
-        "resumen":    {"type": "string"},
+        "categoria": {"type": "string"},
+        "etiquetas": {"type": "array", "items": {"type": "string"}},
+        "resumen": {"type": "string"},
     },
     "required": ["categoria", "etiquetas", "resumen"],
 }
@@ -39,6 +47,7 @@ _DOC_ALPHA_RATIO_MIN = 0.45
 
 
 # ── text extraction ───────────────────────────────────────────────────────────
+
 
 def extract_text_pdf(path: Path) -> str:
     parts: list[str] = []
@@ -61,11 +70,7 @@ def extract_text_docx(path: Path) -> str:
                 return ""
             with z.open("word/document.xml") as f:
                 root = ET.parse(f).getroot()
-                texts = [
-                    node.text
-                    for node in root.iter(f"{{{_DOCX_NS}}}t")
-                    if node.text
-                ]
+                texts = [node.text for node in root.iter(f"{{{_DOCX_NS}}}t") if node.text]
                 return " ".join(texts)[:4000]
     except Exception as e:
         logger.warning("extract_docx | %s | %s", path, e)
@@ -99,15 +104,17 @@ def extract_text_doc_legacy(path: Path) -> str:
 
     if ratio < _DOC_ALPHA_RATIO_MIN:
         logger.warning(
-            "extract_doc_legacy | %s | discarded — alpha ratio %.2f below threshold "
-            "(likely binary noise)",
-            path, ratio,
+            "extract_doc_legacy | %s | discarded — alpha ratio %.2f below threshold (likely binary noise)",
+            path,
+            ratio,
         )
         return ""
 
     logger.warning(
         "extract_doc_legacy | %s | degraded OLE2 extraction — alpha %.0f%%, %d chars extracted",
-        path, ratio * 100, len(result),
+        path,
+        ratio * 100,
+        len(result),
     )
     return result[:4000]
 
@@ -169,6 +176,7 @@ def extract_text(path: Path, extension: str) -> str:
 
 # ── Validation ────────────────────────────────────────────────────────────────
 
+
 def _validate_analysis(data) -> dict:
     """Normalize and validate an Ollama analysis result.
 
@@ -186,10 +194,7 @@ def _validate_analysis(data) -> dict:
         raw_tags = [raw_tags]
     elif not isinstance(raw_tags, list):
         raw_tags = []
-    etiquetas = [
-        e.strip() for e in raw_tags
-        if isinstance(e, str) and e.strip()
-    ][:5]
+    etiquetas = [e.strip() for e in raw_tags if isinstance(e, str) and e.strip()][:5]
 
     resumen = data.get("resumen", "")
     if not isinstance(resumen, str):
@@ -200,6 +205,7 @@ def _validate_analysis(data) -> dict:
 
 
 # ── Ollama analysis ───────────────────────────────────────────────────────────
+
 
 def analyze_with_ollama(text: str, filename: str) -> dict:
     """Call Ollama with JSON Schema format and validate.
@@ -237,6 +243,7 @@ def analyze_with_ollama(text: str, filename: str) -> dict:
 
 
 # ── public API ────────────────────────────────────────────────────────────────
+
 
 def analyze_file(
     path: Path,

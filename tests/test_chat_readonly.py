@@ -4,6 +4,7 @@ These tests verify that the security boundary (get_readonly_connection +
 authorizer) holds independently of safety_check(), by calling _execute_query
 directly with hostile SQL.
 """
+
 import sqlite3
 import sys
 from pathlib import Path
@@ -14,10 +15,9 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import chat
-import database
-
 
 # ── fixture ───────────────────────────────────────────────────────────────────
+
 
 @pytest.fixture
 def tmp_db(tmp_path):
@@ -33,6 +33,7 @@ def tmp_db(tmp_path):
 
 
 # ── SELECT (must succeed) ─────────────────────────────────────────────────────
+
 
 def test_select_returns_rows(tmp_db):
     with patch("database.DB_PATH", tmp_db):
@@ -54,6 +55,7 @@ def test_select_aggregate(tmp_db):
 
 
 # ── LIMIT enforcement ─────────────────────────────────────────────────────────
+
 
 def test_limit_added_when_absent(tmp_db):
     with patch("database.DB_PATH", tmp_db):
@@ -81,6 +83,7 @@ def test_wrap_limit_skips_when_present():
 
 
 # ── Denied operations — authorizer layer ─────────────────────────────────────
+
 
 def test_update_denied(tmp_db):
     with patch("database.DB_PATH", tmp_db):
@@ -123,18 +126,22 @@ def test_data_not_mutated_after_denied_update(tmp_db):
 
 # ── safety_check pre-filter ───────────────────────────────────────────────────
 
-@pytest.mark.parametrize("sql", [
-    "PRAGMA table_info(archivos)",
-    "ATTACH ':memory:' AS mem",
-    "DROP TABLE archivos",
-    "DELETE FROM archivos",
-    "UPDATE archivos SET nombre='x'",
-    "INSERT INTO archivos VALUES (3,'x',0)",
-    "VACUUM",
-    "ALTER TABLE archivos ADD COLUMN bad TEXT",
-    "CREATE TABLE evil (id INTEGER)",
-    "TRUNCATE TABLE archivos",
-])
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "PRAGMA table_info(archivos)",
+        "ATTACH ':memory:' AS mem",
+        "DROP TABLE archivos",
+        "DELETE FROM archivos",
+        "UPDATE archivos SET nombre='x'",
+        "INSERT INTO archivos VALUES (3,'x',0)",
+        "VACUUM",
+        "ALTER TABLE archivos ADD COLUMN bad TEXT",
+        "CREATE TABLE evil (id INTEGER)",
+        "TRUNCATE TABLE archivos",
+    ],
+)
 def test_safety_check_blocks_dangerous_sql(sql):
     assert chat.safety_check(sql) is False
 

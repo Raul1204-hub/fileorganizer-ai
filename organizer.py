@@ -20,15 +20,17 @@ def propose_organization(files: list[dict]) -> list[dict]:
             else:
                 seen_hashes[h] = f["ruta_actual"]
 
-        proposals.append({
-            "nombre":          f["nombre"],
-            "ruta_actual":     f["ruta_actual"],
-            "categoria_nombre":f["categoria_nombre"],
-            "tamaño_bytes":    f.get("tamaño_bytes", 0),
-            "hash_blake2":     h,
-            "is_duplicate":    is_dup,
-            "duplicate_of":    dup_of,
-        })
+        proposals.append(
+            {
+                "nombre": f["nombre"],
+                "ruta_actual": f["ruta_actual"],
+                "categoria_nombre": f["categoria_nombre"],
+                "tamaño_bytes": f.get("tamaño_bytes", 0),
+                "hash_blake2": h,
+                "is_duplicate": is_dup,
+                "duplicate_of": dup_of,
+            }
+        )
 
     return proposals
 

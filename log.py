@@ -12,8 +12,8 @@ _LOG_DIR = Path(__file__).parent / "logs"
 _LOG_FILE = _LOG_DIR / "fileorganizer.log"
 
 _CONSOLE_FMT = "%(levelname)-8s %(name)s: %(message)s"
-_FILE_FMT    = "%(asctime)s %(levelname)-8s %(name)s: %(message)s"
-_DATE_FMT    = "%Y-%m-%dT%H:%M:%S"
+_FILE_FMT = "%(asctime)s %(levelname)-8s %(name)s: %(message)s"
+_DATE_FMT = "%Y-%m-%dT%H:%M:%S"
 
 
 def setup_logging() -> logging.Logger:

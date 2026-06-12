@@ -4,7 +4,7 @@ import sqlite3
 import threading
 
 import database
-from config import SQL_MODEL, RESPONSE_MODEL
+from config import RESPONSE_MODEL, SQL_MODEL
 from ollama_client import call_ollama, check_ollama, pull_commands
 
 DB_SCHEMA = """
@@ -33,8 +33,8 @@ _BLOCKED = re.compile(
     re.IGNORECASE,
 )
 
-_QUERY_LIMIT    = 200   # max rows returned by the chat query engine
-_QUERY_TIMEOUT_S = 30   # seconds before conn.interrupt() fires
+_QUERY_LIMIT = 200  # max rows returned by the chat query engine
+_QUERY_TIMEOUT_S = 30  # seconds before conn.interrupt() fires
 
 
 def safety_check(sql: str) -> bool:
@@ -62,9 +62,7 @@ def generate_sql(question: str) -> str:
     tags_str = ", ".join(tags) if tags else "none"
 
     recent = database.get_chat_historial(limit=3)
-    history_lines = "\n".join(
-        f"Q: {h['pregunta']}\nSQL: {h['sql_generada']}" for h in reversed(recent)
-    )
+    history_lines = "\n".join(f"Q: {h['pregunta']}\nSQL: {h['sql_generada']}" for h in reversed(recent))
 
     prompt = (
         "You are a SQLite expert. Generate ONLY a valid SQLite SELECT query.\n"
@@ -104,9 +102,7 @@ def _execute_query(sql: str) -> list[dict]:
         return [dict(r) for r in cur.fetchall()]
     except sqlite3.OperationalError as e:
         if "interrupt" in str(e).lower():
-            raise ValueError(
-                f"La consulta fue interrumpida (límite de {_QUERY_TIMEOUT_S}s superado)"
-            ) from e
+            raise ValueError(f"La consulta fue interrumpida (límite de {_QUERY_TIMEOUT_S}s superado)") from e
         raise ValueError(f"SQL error: {e}") from e
     except Exception as e:
         raise ValueError(f"SQL error: {e}") from e
@@ -139,7 +135,9 @@ def chat_query(question: str) -> dict:
     if not status["running"]:
         return {
             "respuesta": "⚠️ Ollama no está respondiendo. Asegúrate de que Ollama está en ejecución.",
-            "resultados": [], "sql": "", "error": "ollama_not_running",
+            "resultados": [],
+            "sql": "",
+            "error": "ollama_not_running",
         }
 
     if status["missing"]:
@@ -149,7 +147,9 @@ def chat_query(question: str) -> dict:
                 "⚠️ Los modelos de IA no están instalados en Ollama.\n\n"
                 f"Ejecuta estos comandos en tu terminal:\n{cmds}"
             ),
-            "resultados": [], "sql": "", "error": "models_not_installed",
+            "resultados": [],
+            "sql": "",
+            "error": "models_not_installed",
             "missing_models": status["missing"],
         }
 

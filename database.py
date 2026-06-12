@@ -5,14 +5,14 @@ from config import DB_PATH
 
 CATEGORIAS_SEED = [
     (1, "Documentos", "#4F46E5", "📄"),
-    (2, "Imágenes",   "#10B981", "🖼️"),
-    (3, "Audio",      "#F59E0B", "🎵"),
-    (4, "Vídeo",      "#EF4444", "🎬"),
-    (5, "Código",     "#8B5CF6", "💻"),
-    (6, "Datos",      "#06B6D4", "🗄️"),
-    (7, "Comprimidos","#6B7280", "📦"),
-    (8, "Programas",  "#F97316", "⚙️"),
-    (9, "Desconocido","#9CA3AF", "❓"),
+    (2, "Imágenes", "#10B981", "🖼️"),
+    (3, "Audio", "#F59E0B", "🎵"),
+    (4, "Vídeo", "#EF4444", "🎬"),
+    (5, "Código", "#8B5CF6", "💻"),
+    (6, "Datos", "#06B6D4", "🗄️"),
+    (7, "Comprimidos", "#6B7280", "📦"),
+    (8, "Programas", "#F97316", "⚙️"),
+    (9, "Desconocido", "#9CA3AF", "❓"),
 ]
 
 
@@ -23,11 +23,11 @@ def get_connection():
 
 
 # SQLite authorizer action codes (from sqlite3.h)
-_SQLITE_READ     = 20
-_SQLITE_SELECT   = 21
+_SQLITE_READ = 20
+_SQLITE_SELECT = 21
 _SQLITE_FUNCTION = 31
-_SQLITE_OK       = 0
-_SQLITE_DENY     = 1
+_SQLITE_OK = 0
+_SQLITE_DENY = 1
 
 
 def _readonly_authorizer(action_code, arg1, arg2, db_name, trigger_name):
@@ -157,8 +157,17 @@ def migrate_schema():
 
 # ── archivos ──────────────────────────────────────────────────────────────────
 
-def insert_archivo(nombre, extension, ruta_actual, tamaño_bytes,
-                   fecha_modificacion, hash_blake2, categoria_id, resumen_ia=None):
+
+def insert_archivo(
+    nombre,
+    extension,
+    ruta_actual,
+    tamaño_bytes,
+    fecha_modificacion,
+    hash_blake2,
+    categoria_id,
+    resumen_ia=None,
+):
     conn = get_connection()
     cur = conn.cursor()
     cur.execute(
@@ -166,8 +175,17 @@ def insert_archivo(nombre, extension, ruta_actual, tamaño_bytes,
            (nombre, extension, ruta_actual, tamaño_bytes, fecha_modificacion,
             fecha_indexado, hash_blake2, categoria_id, resumen_ia)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-        (nombre, extension, str(ruta_actual), tamaño_bytes, fecha_modificacion,
-         datetime.now().isoformat(), hash_blake2, categoria_id, resumen_ia),
+        (
+            nombre,
+            extension,
+            str(ruta_actual),
+            tamaño_bytes,
+            fecha_modificacion,
+            datetime.now().isoformat(),
+            hash_blake2,
+            categoria_id,
+            resumen_ia,
+        ),
     )
     archivo_id = cur.lastrowid
     conn.commit()
@@ -259,8 +277,9 @@ def get_all_archivos_indexed() -> dict:
     return {r["ruta_actual"]: dict(r) for r in rows}
 
 
-def update_archivo_full(archivo_id, nombre, extension, ruta_actual, tamaño_bytes,
-                        fecha_modificacion, hash_blake2, categoria_id):
+def update_archivo_full(
+    archivo_id, nombre, extension, ruta_actual, tamaño_bytes, fecha_modificacion, hash_blake2, categoria_id
+):
     """Update metadata for a modified file; preserves resumen_ia and etiquetas rows."""
     conn = get_connection()
     cur = conn.cursor()
@@ -269,8 +288,16 @@ def update_archivo_full(archivo_id, nombre, extension, ruta_actual, tamaño_byte
            SET nombre=?, extension=?, ruta_actual=?, tamaño_bytes=?,
                fecha_modificacion=?, hash_blake2=?, categoria_id=?, existe=1
            WHERE id=?""",
-        (nombre, extension, str(ruta_actual), tamaño_bytes,
-         fecha_modificacion, hash_blake2, categoria_id, archivo_id),
+        (
+            nombre,
+            extension,
+            str(ruta_actual),
+            tamaño_bytes,
+            fecha_modificacion,
+            hash_blake2,
+            categoria_id,
+            archivo_id,
+        ),
     )
     conn.commit()
     conn.close()
@@ -329,6 +356,7 @@ def clear_etiquetas_archivo(archivo_id: int):
 
 # ── etiquetas ─────────────────────────────────────────────────────────────────
 
+
 def insert_etiqueta(archivo_id, etiqueta):
     conn = get_connection()
     cur = conn.cursor()
@@ -357,15 +385,20 @@ def get_all_etiquetas():
 
 # ── historial ─────────────────────────────────────────────────────────────────
 
+
 def insert_historial(archivo_id, ruta_origen, ruta_destino, operacion):
     conn = get_connection()
     cur = conn.cursor()
     cur.execute(
         """INSERT INTO historial (archivo_id, ruta_origen, ruta_destino, operacion, fecha, revertido)
            VALUES (?, ?, ?, ?, ?, 0)""",
-        (archivo_id, str(ruta_origen) if ruta_origen else None,
-         str(ruta_destino) if ruta_destino else None,
-         operacion, datetime.now().isoformat()),
+        (
+            archivo_id,
+            str(ruta_origen) if ruta_origen else None,
+            str(ruta_destino) if ruta_destino else None,
+            operacion,
+            datetime.now().isoformat(),
+        ),
     )
     conn.commit()
     conn.close()
@@ -409,6 +442,7 @@ def get_historial_by_archivo(archivo_id):
 
 
 # ── recomendaciones ───────────────────────────────────────────────────────────
+
 
 def insert_recomendacion(archivo_id, tipo, mensaje):
     conn = get_connection()
@@ -463,6 +497,7 @@ def clear_recomendaciones():
 
 # ── chat_historial ────────────────────────────────────────────────────────────
 
+
 def insert_chat_historial(pregunta, sql_generada, respuesta):
     conn = get_connection()
     cur = conn.cursor()
@@ -485,6 +520,7 @@ def get_chat_historial(limit=5):
 
 # ── backup_operaciones ────────────────────────────────────────────────────────
 
+
 def insert_backup_operacion(archivo_id, nombre_original, ruta_original, ruta_nueva, operacion):
     conn = get_connection()
     cur = conn.cursor()
@@ -492,9 +528,14 @@ def insert_backup_operacion(archivo_id, nombre_original, ruta_original, ruta_nue
         """INSERT INTO backup_operaciones
            (archivo_id, nombre_original, ruta_original, ruta_nueva, operacion, fecha_operacion, revertido)
            VALUES (?, ?, ?, ?, ?, ?, 0)""",
-        (archivo_id, nombre_original, str(ruta_original),
-         str(ruta_nueva) if ruta_nueva else None,
-         operacion, datetime.now().isoformat()),
+        (
+            archivo_id,
+            nombre_original,
+            str(ruta_original),
+            str(ruta_nueva) if ruta_nueva else None,
+            operacion,
+            datetime.now().isoformat(),
+        ),
     )
     backup_id = cur.lastrowid
     conn.commit()
@@ -539,6 +580,7 @@ def mark_backup_revertido(backup_id):
 
 
 # ── stats & misc ──────────────────────────────────────────────────────────────
+
 
 def get_stats():
     conn = get_connection()

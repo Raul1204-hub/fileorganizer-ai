@@ -5,8 +5,15 @@ from pathlib import Path
 import database
 
 SENSITIVE_KEYWORDS = [
-    "password", "contraseña", "credential", "token",
-    "secret", "passwd", "clave", "apikey", "api_key",
+    "password",
+    "contraseña",
+    "credential",
+    "token",
+    "secret",
+    "passwd",
+    "clave",
+    "apikey",
+    "api_key",
 ]
 
 
@@ -24,6 +31,7 @@ def run_all_rules():
 
 # ── R1: Duplicates ────────────────────────────────────────────────────────────
 
+
 def r1_duplicates():
     conn = database.get_connection()
     cur = conn.cursor()
@@ -40,12 +48,14 @@ def r1_duplicates():
         ids = [int(i) for i in row["ids"].split(",")]
         for archivo_id in ids:
             database.insert_recomendacion(
-                archivo_id, "R1",
+                archivo_id,
+                "R1",
                 f"{row['cnt']} archivos duplicados detectados (mismo contenido)",
             )
 
 
 # ── R2: Old files (>2 years without modification) ────────────────────────────
+
 
 def r2_old_files():
     cutoff = (datetime.now() - timedelta(days=730)).isoformat()
@@ -53,30 +63,32 @@ def r2_old_files():
         mod = a.get("fecha_modificacion") or ""
         if mod and mod < cutoff:
             database.insert_recomendacion(
-                a["id"], "R2",
+                a["id"],
+                "R2",
                 "Sin modificar desde hace más de 2 años",
             )
 
 
 # ── R3: Top 5 heaviest files ──────────────────────────────────────────────────
 
+
 def r3_heavy_files():
     conn = database.get_connection()
     cur = conn.cursor()
-    cur.execute(
-        "SELECT id, nombre, tamaño_bytes FROM archivos ORDER BY tamaño_bytes DESC LIMIT 5"
-    )
+    cur.execute("SELECT id, nombre, tamaño_bytes FROM archivos ORDER BY tamaño_bytes DESC LIMIT 5")
     rows = cur.fetchall()
     conn.close()
     for row in rows:
         mb = (row["tamaño_bytes"] or 0) / (1024 * 1024)
         database.insert_recomendacion(
-            row["id"], "R3",
+            row["id"],
+            "R3",
             f"Uno de los 5 archivos más pesados ({mb:.1f} MB)",
         )
 
 
 # ── R4: Same category scattered across 3+ folders ────────────────────────────
+
 
 def r4_scattered_categories():
     conn = database.get_connection()
@@ -102,12 +114,14 @@ def r4_scattered_categories():
             n_folders = len(folders)
             for archivo_id in cat_files[cat]:
                 database.insert_recomendacion(
-                    archivo_id, "R4",
+                    archivo_id,
+                    "R4",
                     f"{n_files} archivos de '{cat}' dispersos en {n_folders} carpetas",
                 )
 
 
 # ── R5: Sensitive filenames ───────────────────────────────────────────────────
+
 
 def r5_sensitive_names():
     for a in database.get_all_archivos():
@@ -115,7 +129,8 @@ def r5_sensitive_names():
         for kw in SENSITIVE_KEYWORDS:
             if kw in nombre_lower:
                 database.insert_recomendacion(
-                    a["id"], "R5",
+                    a["id"],
+                    "R5",
                     f"Nombre sugiere contenido sensible (contiene '{kw}')",
                 )
                 break
@@ -123,17 +138,20 @@ def r5_sensitive_names():
 
 # ── R6: Temp / log / bak files ───────────────────────────────────────────────
 
+
 def r6_temp_files():
     TEMP_EXTS = {".tmp", ".log", ".bak"}
     for a in database.get_all_archivos():
         if (a.get("extension") or "").lower() in TEMP_EXTS:
             database.insert_recomendacion(
-                a["id"], "R6",
+                a["id"],
+                "R6",
                 "Archivo temporal, probablemente innecesario",
             )
 
 
 # ── R7: Heavy video not recently used ────────────────────────────────────────
+
 
 def r7_heavy_video():
     VIDEO_EXTS = {".mp4", ".mkv"}
@@ -146,6 +164,7 @@ def r7_heavy_video():
         if ext in VIDEO_EXTS and size > SIZE_LIMIT and modified < cutoff:
             mb = size / (1024 * 1024)
             database.insert_recomendacion(
-                a["id"], "R7",
+                a["id"],
+                "R7",
                 f"Vídeo pesado ({mb:.0f} MB) sin uso reciente (más de 1 año)",
             )

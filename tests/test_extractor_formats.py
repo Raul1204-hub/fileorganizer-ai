@@ -5,12 +5,12 @@ Covers:
 - .xlsx: openpyxl-based extraction including numbers and dates
 - scanner.detect_magic: graceful degradation when magic is unavailable
 """
+
+import io
 import sys
 import zipfile
-import io
-import struct
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -19,8 +19,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 import analyzer
 import scanner
 
-
 # ── .doc legacy (OLE2) ───────────────────────────────────────────────────────
+
 
 def _write_fake_ole2(path: Path, embedded_text: str) -> None:
     """Write a file that starts with the OLE2 magic bytes and contains embedded text."""
@@ -80,7 +80,7 @@ def test_docx_not_routed_to_legacy(tmp_path):
         xml = (
             '<?xml version="1.0" encoding="UTF-8"?>'
             '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
-            '<w:body><w:p><w:r><w:t>Hello from docx</w:t></w:r></w:p></w:body>'
+            "<w:body><w:p><w:r><w:t>Hello from docx</w:t></w:r></w:p></w:body>"
             "</w:document>"
         )
         z.writestr("word/document.xml", xml)
@@ -92,9 +92,11 @@ def test_docx_not_routed_to_legacy(tmp_path):
 
 # ── XLSX (openpyxl) ───────────────────────────────────────────────────────────
 
+
 def _make_xlsx(path: Path, rows: list[list]) -> None:
     """Create a minimal .xlsx with openpyxl for testing."""
     import openpyxl
+
     wb = openpyxl.Workbook()
     ws = wb.active
     for row in rows:
@@ -132,6 +134,7 @@ def test_xlsx_respects_100_row_limit(tmp_path):
 
 def test_xlsx_empty_workbook(tmp_path):
     import openpyxl
+
     xlsx = tmp_path / "empty.xlsx"
     wb = openpyxl.Workbook()
     wb.active.title = "Sheet1"
@@ -152,6 +155,7 @@ def test_xlsx_routed_via_extract_text(tmp_path):
 
 # ── scanner.detect_magic degradation ─────────────────────────────────────────
 
+
 def test_detect_magic_returns_empty_when_unavailable(tmp_path):
     """When magic is not importable, detect_magic must return '' silently."""
     dummy = tmp_path / "file.bin"
@@ -170,9 +174,9 @@ def test_detect_magic_logs_exception(tmp_path, caplog):
     mock_magic = MagicMock()
     mock_magic.from_file.side_effect = RuntimeError("libmagic failure")
 
-    with patch.object(scanner, "_MAGIC_AVAILABLE", True), \
-         patch.dict(sys.modules, {"magic": mock_magic}):
+    with patch.object(scanner, "_MAGIC_AVAILABLE", True), patch.dict(sys.modules, {"magic": mock_magic}):
         import importlib
+
         importlib.reload(scanner)  # pick up the patched module
         # Directly test the exception path
         with patch("scanner.magic", mock_magic):
@@ -184,6 +188,7 @@ def test_detect_magic_logs_exception(tmp_path, caplog):
 def test_detect_magic_available_on_windows():
     """On Windows, magic should be available via python-magic-bin."""
     import sys
+
     if sys.platform != "win32":
         pytest.skip("Windows-only test")
     # If python-magic-bin is installed correctly, _MAGIC_AVAILABLE is True
@@ -191,6 +196,7 @@ def test_detect_magic_available_on_windows():
 
 
 # ── alpha ratio heuristic boundary ───────────────────────────────────────────
+
 
 def test_alpha_ratio_boundary(tmp_path):
     """Text just above the alpha threshold must be returned; below must be discarded."""

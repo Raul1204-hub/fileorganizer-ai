@@ -17,10 +17,10 @@ import log as _log
 def cli_scan(target_path: str) -> None:
     """Incremental scan: only processes new/modified files, preserves history."""
     _log.setup_logging()
-    import scanner
     import analyzer
-    import recommendations
     import ollama_client
+    import recommendations
+    import scanner
     from config import ANALYSIS_MODEL
 
     print(f"[+] Target: {target_path}")
@@ -50,8 +50,10 @@ def cli_scan(target_path: str) -> None:
         db_row = db_index.get(ruta)
         if db_row is None:
             new_files.append(f)
-        elif (f["tamaño_bytes"] == db_row["tamaño_bytes"]
-              and f["fecha_modificacion"] == db_row["fecha_modificacion"]):
+        elif (
+            f["tamaño_bytes"] == db_row["tamaño_bytes"]
+            and f["fecha_modificacion"] == db_row["fecha_modificacion"]
+        ):
             if not db_row.get("existe", 1):
                 database.mark_archivo_existe(db_row["id"])
             unchanged.append(f)
@@ -62,8 +64,10 @@ def cli_scan(target_path: str) -> None:
         if ruta not in disk_paths:
             disappeared_ids.append(db_row["id"])
 
-    print(f"    Sin cambios: {len(unchanged)}  |  Nuevos: {len(new_files)}"
-          f"  |  Modificados: {len(modified)}  |  Desaparecidos: {len(disappeared_ids)}")
+    print(
+        f"    Sin cambios: {len(unchanged)}  |  Nuevos: {len(new_files)}"
+        f"  |  Modificados: {len(modified)}  |  Desaparecidos: {len(disappeared_ids)}"
+    )
 
     # ── Mark disappeared ──────────────────────────────────────────────────────
     for aid in disappeared_ids:
@@ -184,8 +188,10 @@ def cli_scan(target_path: str) -> None:
         print()
     total_fallos = fail_ext[0] + fail_ollama[0]
     fail_detail = f" ({fail_ext[0]} extracción, {fail_ollama[0]} Ollama)" if total_fallos else ""
-    print(f"[+] Analizados {n_analyzed[0]}, fallidos {total_fallos}{fail_detail}"
-          + (f" — detalle en logs/fileorganizer.log" if total_fallos else ""))
+    print(
+        f"[+] Analizados {n_analyzed[0]}, fallidos {total_fallos}{fail_detail}"
+        + (" — detalle en logs/fileorganizer.log" if total_fallos else "")
+    )
 
     # ── Recommendations ───────────────────────────────────────────────────────
     print("[+] Running recommendation rules…")
@@ -232,6 +238,7 @@ def main() -> None:
         # Default: launch web server
         database.create_tables()
         from web.app import start_server
+
         print("[+] FileOrganizer AI starting…")
         print("[+] Web UI -> http://localhost:5000")
         print("[+] Press Ctrl+C to stop\n")

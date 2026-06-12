@@ -1,0 +1,26 @@
+[tool.ruff]
+line-length = 110
+target-version = "py310"
+exclude = [".venv", "venv", "__pycache__"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+ignore = [
+    # sys.path manipulation before local imports is intentional in web/app.py
+    "E402",
+]
+
+[tool.ruff.lint.isort]
+known-first-party = [
+    "analyzer", "chat", "config", "database", "log",
+    "main", "ollama_client", "organizer", "recommendations", "scanner",
+]
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]

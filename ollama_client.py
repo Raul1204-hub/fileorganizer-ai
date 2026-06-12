@@ -11,7 +11,7 @@ import time
 
 import requests
 
-from config import OLLAMA_BASE, OLLAMA_TIMEOUT, ANALYSIS_MODEL, SQL_MODEL, RESPONSE_MODEL
+from config import ANALYSIS_MODEL, OLLAMA_BASE, OLLAMA_TIMEOUT, RESPONSE_MODEL, SQL_MODEL
 from log import get_logger
 
 logger = get_logger("fileorganizer.ollama")

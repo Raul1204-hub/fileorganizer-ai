@@ -1,4 +1,5 @@
 """Unit tests for analyzer._validate_analysis."""
+
 import sys
 from pathlib import Path
 
@@ -6,8 +7,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from analyzer import _validate_analysis
 
-
 # ── helpers ───────────────────────────────────────────────────────────────────
+
 
 def _ok(result: dict) -> None:
     assert isinstance(result, dict) and len(result) == 3, f"Expected 3-key dict, got {result!r}"
@@ -15,6 +16,7 @@ def _ok(result: dict) -> None:
 
 
 # ── valid / happy-path cases ──────────────────────────────────────────────────
+
 
 def test_valid_input_passes_through():
     data = {"categoria": "Documentos", "etiquetas": ["informe", "pdf"], "resumen": "Un documento."}
@@ -26,14 +28,24 @@ def test_valid_input_passes_through():
 
 
 def test_all_valid_categories_accepted():
-    valid = ["Documentos", "Imágenes", "Audio", "Vídeo", "Código",
-             "Datos", "Comprimidos", "Programas", "Desconocido"]
+    valid = [
+        "Documentos",
+        "Imágenes",
+        "Audio",
+        "Vídeo",
+        "Código",
+        "Datos",
+        "Comprimidos",
+        "Programas",
+        "Desconocido",
+    ]
     for cat in valid:
         r = _validate_analysis({"categoria": cat, "etiquetas": [], "resumen": ""})
         assert r["categoria"] == cat, f"{cat!r} should be accepted as-is"
 
 
 # ── categoria normalisation ───────────────────────────────────────────────────
+
 
 def test_unknown_category_becomes_desconocido():
     data = {"categoria": "Alien", "etiquetas": [], "resumen": ""}
@@ -51,6 +63,7 @@ def test_missing_category_key_becomes_desconocido():
 
 
 # ── etiquetas normalisation ───────────────────────────────────────────────────
+
 
 def test_tags_capped_at_five():
     tags = ["a", "b", "c", "d", "e", "f", "g"]
@@ -88,6 +101,7 @@ def test_missing_tags_key_gives_empty_list():
 
 # ── resumen normalisation ─────────────────────────────────────────────────────
 
+
 def test_resumen_truncated_at_300():
     long = "x" * 500
     result = _validate_analysis({"categoria": "Documentos", "etiquetas": [], "resumen": long})
@@ -111,6 +125,7 @@ def test_missing_resumen_key_gives_empty_string():
 
 # ── non-dict / broken input ───────────────────────────────────────────────────
 
+
 def test_non_dict_returns_empty():
     assert _validate_analysis(None) == {}
     assert _validate_analysis([1, 2, 3]) == {}
@@ -128,10 +143,9 @@ def test_empty_dict_normalises_gracefully():
 
 # ── nested / unusual structures ───────────────────────────────────────────────
 
+
 def test_nested_dict_as_resumen_coerced_to_string():
-    result = _validate_analysis(
-        {"categoria": "Documentos", "etiquetas": [], "resumen": {"sub": "val"}}
-    )
+    result = _validate_analysis({"categoria": "Documentos", "etiquetas": [], "resumen": {"sub": "val"}})
     assert isinstance(result["resumen"], str)
 
 
@@ -142,8 +156,8 @@ def test_tags_with_nested_list_discards_non_strings():
 
 
 if __name__ == "__main__":
-    import unittest
     # Run with: python tests/test_analyzer_validation.py -v
     # or: python -m pytest tests/test_analyzer_validation.py -v
     import pytest
+
     raise SystemExit(pytest.main([__file__, "-v"]))

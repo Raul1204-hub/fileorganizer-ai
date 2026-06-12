@@ -1,6 +1,34 @@
-data/catalogo.db
+# Database
+*.db
+data/
+
+# Python
 __pycache__/
-*.pyc
+*.py[cod]
+*.pyo
+
+# Virtual environments
+.venv/
 venv/
+env/
+
+# Environment / secrets
 .env
+
+# Logs
 logs/
+
+# Build / packaging
+dist/
+build/
+*.egg-info/
+
+# Testing / tools
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# IDE
+.vscode/
+.idea/

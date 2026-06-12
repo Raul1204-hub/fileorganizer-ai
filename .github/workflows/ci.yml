@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+
+jobs:
+  test:
+    name: "Python ${{ matrix.python-version }}"
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      # libmagic is needed by python-magic on Linux
+      - name: Install system dependencies
+        run: sudo apt-get install -y libmagic1
+
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt ruff pytest
+
+      - name: Lint — ruff check
+        run: ruff check .
+
+      - name: Format — ruff format --check
+        run: ruff format --check .
+
+      - name: Tests
+        # Ollama is not available in CI; tests that need it skip automatically
+        # via the requires_ollama marker defined in tests/conftest.py
+        run: pytest tests/ -v --tb=short

@@ -11,17 +11,18 @@ import ollama_client
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import log as _log
+
 _log.setup_logging()
 _wlog = _log.get_logger("fileorganizer.web")
 
 from flask import Flask, Response, jsonify, render_template, request, stream_with_context
 
+import analyzer
 import chat as chat_module
 import database
 import organizer
 import recommendations
 import scanner
-import analyzer
 
 app = Flask(__name__, template_folder="templates")
 app.secret_key = "fileorganizer-ai-secret-2024"
@@ -35,18 +36,18 @@ class _ScanState:
     def __init__(self):
         self.running = False
         self.cancelled = False
-        self.fase = "idle"          # idle|escaneando|analizando|recomendaciones|completado|error
+        self.fase = "idle"  # idle|escaneando|analizando|recomendaciones|completado|error
         self.hechos = 0
         self.total = 0
         self.archivo_actual = ""
         self.t_inicio_fase = 0.0
-        self.eta_segundos = -1.0    # -1 = calculando
+        self.eta_segundos = -1.0  # -1 = calculando
         self.errores: list[str] = []
         self.summary: dict = {}
         # EMA — analysis phase (seconds per character, for Ollama ETA)
         self.ema_anal_spc = 0.0
         self.ema_anal_n = 0
-        self.avg_chars = 0.0        # running mean chars per doc
+        self.avg_chars = 0.0  # running mean chars per doc
         # Failure counters (accumulated during analysis phase)
         self.analizados = 0
         self.fallos_extraccion = 0
@@ -83,6 +84,7 @@ def _snapshot() -> dict:
 
 # ── Template helpers ──────────────────────────────────────────────────────────
 
+
 def _format_size(val) -> str:
     try:
         val = int(val or 0)
@@ -99,6 +101,7 @@ app.jinja_env.filters["format_size"] = _format_size
 
 
 # ── Page routes ───────────────────────────────────────────────────────────────
+
 
 @app.route("/")
 def index():
@@ -118,25 +121,27 @@ def index():
 
 @app.route("/explorar")
 def explorar():
-    search     = request.args.get("search", "").strip() or None
-    raw_cat    = request.args.get("categoria_id", "")
+    search = request.args.get("search", "").strip() or None
+    raw_cat = request.args.get("categoria_id", "")
     categoria_id = int(raw_cat) if raw_cat.isdigit() else None
-    sort       = request.args.get("sort", "fecha")   # fecha | nombre | tamaño
-    page       = max(1, int(request.args.get("page", 1)))
-    per_page   = 50
-    offset     = (page - 1) * per_page
+    sort = request.args.get("sort", "fecha")  # fecha | nombre | tamaño
+    page = max(1, int(request.args.get("page", 1)))
+    per_page = 50
+    offset = (page - 1) * per_page
 
-    all_files  = database.get_all_archivos(search=search, categoria_id=categoria_id)
+    all_files = database.get_all_archivos(search=search, categoria_id=categoria_id)
 
     # Sort in Python (avoids changing DB layer)
-    sort_keys  = {"nombre": lambda f: (f["nombre"] or "").lower(),
-                  "tamaño": lambda f: f["tamaño_bytes"] or 0,
-                  "fecha":  lambda f: f["fecha_modificacion"] or ""}
+    sort_keys = {
+        "nombre": lambda f: (f["nombre"] or "").lower(),
+        "tamaño": lambda f: f["tamaño_bytes"] or 0,
+        "fecha": lambda f: f["fecha_modificacion"] or "",
+    }
     all_files.sort(key=sort_keys.get(sort, sort_keys["fecha"]), reverse=(sort != "nombre"))
 
-    total      = len(all_files)
-    pages      = max(1, (total + per_page - 1) // per_page)
-    archivos   = all_files[offset : offset + per_page]
+    total = len(all_files)
+    pages = max(1, (total + per_page - 1) // per_page)
+    archivos = all_files[offset : offset + per_page]
     categorias = database.get_categorias()
 
     return render_template(
@@ -159,6 +164,7 @@ def organizar():
 
     # Group files by category, skip files that are already in a categorized subfolder
     from collections import defaultdict
+
     grupos: dict[str, list] = defaultdict(list)
     for a in archivos:
         cat = categorias.get(a["categoria_id"])
@@ -236,6 +242,7 @@ def chat_page():
 
 # ── Chat API ──────────────────────────────────────────────────────────────────
 
+
 @app.route("/chat/query", methods=["POST"])
 def chat_query():
     data = request.get_json() or {}
@@ -247,6 +254,7 @@ def chat_query():
 
 
 # ── Scan API ──────────────────────────────────────────────────────────────────
+
 
 def _run_scan(target_path: str):
     # ── Reset state ───────────────────────────────────────────────────────────
@@ -291,8 +299,10 @@ def _run_scan(target_path: str):
             db_row = db_index.get(ruta)
             if db_row is None:
                 new_files.append(f)
-            elif (f["tamaño_bytes"] == db_row["tamaño_bytes"]
-                  and f["fecha_modificacion"] == db_row["fecha_modificacion"]):
+            elif (
+                f["tamaño_bytes"] == db_row["tamaño_bytes"]
+                and f["fecha_modificacion"] == db_row["fecha_modificacion"]
+            ):
                 if not db_row.get("existe", 1):
                     database.mark_archivo_existe(db_row["id"])
                 unchanged.append(f)
@@ -327,7 +337,8 @@ def _run_scan(target_path: str):
                 n_hashed += 1
 
         hash_map = scanner.smart_hash_files(
-            candidates, disk_files,
+            candidates,
+            disk_files,
             on_progress=_on_hash_progress,
             is_cancelled=lambda: _ss.cancelled,
         )
@@ -341,10 +352,13 @@ def _run_scan(target_path: str):
                 break
             h = hash_map[f["ruta_actual"]]
             aid = database.insert_archivo(
-                nombre=f["nombre"], extension=f["extension"],
-                ruta_actual=f["ruta_actual"], tamaño_bytes=f["tamaño_bytes"],
+                nombre=f["nombre"],
+                extension=f["extension"],
+                ruta_actual=f["ruta_actual"],
+                tamaño_bytes=f["tamaño_bytes"],
                 fecha_modificacion=f["fecha_modificacion"],
-                hash_blake2=h, categoria_id=f["categoria_id"],
+                hash_blake2=h,
+                categoria_id=f["categoria_id"],
             )
             database.insert_historial(aid, None, f["ruta_actual"], "indexar")
             if f["extension"] in scanner.DOC_EXTS:
@@ -365,10 +379,14 @@ def _run_scan(target_path: str):
                 break
             h = hash_map[f["ruta_actual"]]
             database.update_archivo_full(
-                archivo_id=f["db_id"], nombre=f["nombre"], extension=f["extension"],
-                ruta_actual=f["ruta_actual"], tamaño_bytes=f["tamaño_bytes"],
+                archivo_id=f["db_id"],
+                nombre=f["nombre"],
+                extension=f["extension"],
+                ruta_actual=f["ruta_actual"],
+                tamaño_bytes=f["tamaño_bytes"],
                 fecha_modificacion=f["fecha_modificacion"],
-                hash_blake2=h, categoria_id=f["categoria_id"],
+                hash_blake2=h,
+                categoria_id=f["categoria_id"],
             )
             database.insert_historial(f["db_id"], f["ruta_actual"], f["ruta_actual"], "actualizar")
             database.clear_etiquetas_archivo(f["db_id"])
@@ -409,9 +427,7 @@ def _run_scan(target_path: str):
                 _ss.archivo_actual = Path(ruta).name
 
             t0 = time.monotonic()
-            result = analyzer.analyze_file(
-                Path(ruta), Path(ruta).suffix.lower(), on_failure=_on_failure
-            )
+            result = analyzer.analyze_file(Path(ruta), Path(ruta).suffix.lower(), on_failure=_on_failure)
             elapsed = time.monotonic() - t0
             text_len = result.pop("_text_len", 0) if result else 0
 
@@ -422,8 +438,7 @@ def _run_scan(target_path: str):
                 if text_len > 0:
                     n = _ss.ema_anal_n
                     spc = elapsed / text_len
-                    _ss.ema_anal_spc = (_EMA_ALPHA * spc + (1 - _EMA_ALPHA) * _ss.ema_anal_spc
-                                       if n else spc)
+                    _ss.ema_anal_spc = _EMA_ALPHA * spc + (1 - _EMA_ALPHA) * _ss.ema_anal_spc if n else spc
                     _ss.avg_chars = (_ss.avg_chars * n + text_len) / (n + 1)
                     _ss.ema_anal_n = n + 1
                 remaining = _ss.total - _ss.hechos
@@ -473,8 +488,10 @@ def _run_scan(target_path: str):
             _wlog.info(
                 "Scan complete — analizados=%d, fallidos=%d (extracción=%d, Ollama=%d)"
                 " — detalle en logs/fileorganizer.log",
-                _ss.analizados, total_fallos,
-                _ss.fallos_extraccion, _ss.fallos_ollama,
+                _ss.analizados,
+                total_fallos,
+                _ss.fallos_extraccion,
+                _ss.fallos_ollama,
             )
 
     except Exception as exc:
@@ -512,6 +529,7 @@ def api_scan_status():
 @app.route("/api/scan/progress")
 def api_scan_progress():
     """SSE stream: emits a JSON event every second while scan is running."""
+
     def _generate():
         while True:
             snap = _snapshot()
@@ -544,6 +562,7 @@ def api_browse_folder():
     """Open the native Windows folder picker and return the selected path."""
     import tkinter as tk
     from tkinter import filedialog
+
     root = tk.Tk()
     root.withdraw()
     root.wm_attributes("-topmost", 1)
@@ -556,6 +575,7 @@ def api_browse_folder():
 def api_open_location(archivo_id):
     """Open Windows Explorer with the file highlighted."""
     import subprocess
+
     archivo = database.get_archivo(archivo_id)
     if not archivo:
         return jsonify({"error": "Archivo no encontrado"}), 404
@@ -570,6 +590,7 @@ def api_open_location(archivo_id):
 def api_open_file(archivo_id):
     """Open the file with its default Windows application."""
     import os
+
     archivo = database.get_archivo(archivo_id)
     if not archivo:
         return jsonify({"error": "Archivo no encontrado"}), 404
@@ -584,14 +605,17 @@ def api_open_file(archivo_id):
 def api_ollama_status():
     """Check Ollama availability and installed models."""
     status = ollama_client.check_ollama()
-    return jsonify({
-        "running": status["running"],
-        "models": status["installed"],
-        "missing": status["missing"],
-    })
+    return jsonify(
+        {
+            "running": status["running"],
+            "models": status["installed"],
+            "missing": status["missing"],
+        }
+    )
 
 
 # ── Approve / move API ────────────────────────────────────────────────────────
+
 
 @app.route("/api/approve", methods=["POST"])
 def api_approve():
@@ -635,6 +659,7 @@ def api_approve():
 
 # ── Undo API ──────────────────────────────────────────────────────────────────
 
+
 @app.route("/api/undo/<int:backup_id>", methods=["POST"])
 def api_undo(backup_id):
     ok, msg = organizer.undo_operation(backup_id)
@@ -644,14 +669,17 @@ def api_undo(backup_id):
 @app.route("/api/undo-all", methods=["POST"])
 def api_undo_all():
     success, fail = organizer.undo_all_pending()
-    return jsonify({
-        "success": success,
-        "fail": fail,
-        "message": f"Revertidas {success} operaciones. {fail} fallaron.",
-    })
+    return jsonify(
+        {
+            "success": success,
+            "fail": fail,
+            "message": f"Revertidas {success} operaciones. {fail} fallaron.",
+        }
+    )
 
 
 # ── Stats & recommendations API ───────────────────────────────────────────────
+
 
 @app.route("/api/stats")
 def api_stats():
@@ -679,6 +707,7 @@ def api_archivos():
 
 
 # ── Server entry point ────────────────────────────────────────────────────────
+
 
 def start_server(open_browser: bool = True):
     database.create_tables()
