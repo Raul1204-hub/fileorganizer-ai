@@ -41,6 +41,16 @@ def safety_check(sql: str) -> bool:
     return True
 
 
+def _check_ollama() -> tuple[bool, list[str]]:
+    """Returns (is_running, installed_model_names)."""
+    try:
+        resp = requests.get("http://localhost:11434/api/tags", timeout=5)
+        models = [m["name"] for m in resp.json().get("models", [])]
+        return True, models
+    except Exception:
+        return False, []
+
+
 def _call_ollama(model: str, prompt: str, timeout: int = 180) -> str:
     try:
         resp = requests.post(
@@ -52,7 +62,12 @@ def _call_ollama(model: str, prompt: str, timeout: int = 180) -> str:
         raw = resp.json().get("response", "").strip()
         # Strip <think>…</think> blocks
         return re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
-    except Exception:
+    except requests.exceptions.ConnectionError:
+        raise RuntimeError("ollama_not_running")
+    except Exception as e:
+        err = str(e)
+        if "model" in err.lower() and ("not found" in err.lower() or "pull" in err.lower()):
+            raise RuntimeError("model_not_found")
         return ""
 
 
@@ -111,7 +126,30 @@ def _generate_response(question: str, results: list[dict]) -> str:
 
 
 def chat_query(question: str) -> dict:
-    sql = generate_sql(question)
+    # Pre-flight: check Ollama before wasting time
+    running, installed_models = _check_ollama()
+    if not running:
+        return {
+            "respuesta": "⚠️ Ollama no está respondiendo. Asegúrate de que Ollama está en ejecución.",
+            "resultados": [], "sql": "", "error": "ollama_not_running",
+        }
+
+    missing = [m for m in (SQL_MODEL, RESPONSE_MODEL) if not any(m in im for im in installed_models)]
+    if missing:
+        cmds = "\n".join(f"  ollama pull {m}" for m in missing)
+        return {
+            "respuesta": (
+                f"⚠️ Los modelos de IA no están instalados en Ollama.\n\n"
+                f"Ejecuta estos comandos en tu terminal:\n{cmds}"
+            ),
+            "resultados": [], "sql": "", "error": "models_not_installed",
+            "missing_models": missing,
+        }
+
+    try:
+        sql = generate_sql(question)
+    except RuntimeError as e:
+        return {"respuesta": f"⚠️ Error conectando con Ollama: {e}", "resultados": [], "sql": ""}
 
     if not sql:
         return {

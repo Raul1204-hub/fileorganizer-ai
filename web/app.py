@@ -226,15 +226,35 @@ def api_scan_status():
 
 @app.route("/api/browse-folder")
 def api_browse_folder():
-    """Open the native Windows folder picker and return the selected path."""
-    import tkinter as tk
-    from tkinter import filedialog
-    root = tk.Tk()
-    root.withdraw()
-    root.wm_attributes("-topmost", 1)
-    folder = filedialog.askdirectory(parent=root, title="Seleccionar carpeta para escanear")
-    root.destroy()
+    """Open the native Windows folder picker via PowerShell (thread-safe)."""
+    import subprocess
+    script = (
+        "Add-Type -AssemblyName System.Windows.Forms; "
+        "$d = New-Object System.Windows.Forms.FolderBrowserDialog; "
+        "$d.Description = 'Seleccionar carpeta para escanear'; "
+        "$d.ShowNewFolderButton = $true; "
+        "if ($d.ShowDialog() -eq 'OK') { Write-Output $d.SelectedPath }"
+    )
+    try:
+        result = subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
+            capture_output=True, text=True, timeout=120,
+        )
+        folder = result.stdout.strip()
+    except Exception:
+        folder = ""
     return jsonify({"path": folder})
+
+
+@app.route("/api/ollama-status")
+def api_ollama_status():
+    """Check Ollama availability and installed models."""
+    try:
+        resp = requests.get("http://localhost:11434/api/tags", timeout=5)
+        models = [m["name"] for m in resp.json().get("models", [])]
+        return jsonify({"running": True, "models": models})
+    except Exception:
+        return jsonify({"running": False, "models": []})
 
 
 # ── Approve / move API ────────────────────────────────────────────────────────

@@ -163,15 +163,21 @@
     .then(d => {
       document.getElementById(typingId)?.remove();
 
+      const isError = d.error === 'ollama_not_running' || d.error === 'models_not_installed';
+      const bubbleExtra = isError ? ' border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-950' : '';
+
       const resultCards = (d.resultados || []).slice(0, 5).map(r =>
         `<div class="mt-2 p-2 bg-gray-50 dark:bg-gray-800 rounded-lg text-xs border border-gray-200 dark:border-gray-700">
           <a href="/archivo/${r.id || ''}" class="font-semibold text-indigo-600 dark:text-indigo-400 hover:underline block truncate">${esc(r.nombre || '')}</a>
           <div class="text-gray-400 truncate">${esc(r.ruta_actual || '')}</div>
-          <div class="flex gap-2 mt-1 text-gray-400">
-            <span>${formatSize(r.tamaño_bytes)}</span>
-          </div>
+          <div class="flex gap-2 mt-1 text-gray-400"><span>${formatSize(r.tamaño_bytes)}</span></div>
         </div>`
       ).join('');
+
+      const missingBlock = (d.missing_models || []).length
+        ? `<div class="mt-2 bg-gray-100 dark:bg-gray-800 rounded-lg p-2 font-mono text-xs">${
+            d.missing_models.map(m => `<div class="text-emerald-600 dark:text-emerald-400">ollama pull ${esc(m)}</div>`).join('')
+          }</div>` : '';
 
       const sqlBlock = d.sql
         ? `<details class="mt-2"><summary class="text-xs text-gray-400 cursor-pointer hover:text-gray-600 dark:hover:text-gray-300">Ver SQL generada</summary>
@@ -180,11 +186,12 @@
 
       msgs.insertAdjacentHTML('beforeend', `
         <div class="flex justify-start gap-3">
-          <div class="w-8 h-8 bg-indigo-600 rounded-full flex items-center justify-center shrink-0 mt-1">
-            <i class="fa-solid fa-robot text-white text-xs"></i>
+          <div class="w-8 h-8 ${isError ? 'bg-amber-500' : 'bg-indigo-600'} rounded-full flex items-center justify-center shrink-0 mt-1">
+            <i class="fa-solid ${isError ? 'fa-triangle-exclamation' : 'fa-robot'} text-white text-xs"></i>
           </div>
-          <div class="bubble-ai max-w-xl px-4 py-3 text-sm shadow-sm">
-            <p>${esc(d.respuesta || 'Sin respuesta')}</p>
+          <div class="bubble-ai max-w-xl px-4 py-3 text-sm shadow-sm${bubbleExtra}">
+            <p style="white-space: pre-line">${esc(d.respuesta || 'Sin respuesta')}</p>
+            ${missingBlock}
             ${resultCards}
             ${sqlBlock}
           </div>
