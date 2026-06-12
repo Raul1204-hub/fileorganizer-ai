@@ -216,14 +216,8 @@
       Introduce la ruta de la carpeta a analizar. Todos los archivos serán clasificados y los documentos procesados con IA.
     </p>
     <label class="block text-xs font-semibold text-gray-600 dark:text-gray-400 mb-1">Ruta de la carpeta</label>
-    <div class="flex gap-2 mb-4">
-      <input id="scan-path" type="text" placeholder="C:\Users\Raul\Documentos"
-             class="flex-1 border border-gray-200 dark:border-gray-700 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 bg-white dark:bg-gray-800 dark:text-gray-200">
-      <button onclick="browseFolder()" title="Seleccionar carpeta"
-              class="px-4 py-3 border border-gray-200 dark:border-gray-700 rounded-xl text-sm font-medium text-gray-600 dark:text-gray-400 hover:bg-indigo-50 dark:hover:bg-gray-700 hover:text-indigo-600 dark:hover:text-indigo-400 transition whitespace-nowrap">
-        <i class="fa-solid fa-folder-open mr-1"></i> Examinar…
-      </button>
-    </div>
+    <input id="scan-path" type="text" placeholder="C:\Users\Raul\Documentos"
+           class="w-full border border-gray-200 dark:border-gray-700 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 bg-white dark:bg-gray-800 dark:text-gray-200 mb-4">
     <div id="scan-error" class="hidden text-xs text-red-600 bg-red-50 dark:bg-red-950 rounded-lg p-3 mb-4"></div>
     <div class="flex gap-3">
       <button onclick="document.getElementById('scan-modal').classList.add('hidden')"
@@ -322,23 +316,6 @@
 
   document.getElementById('search-input').addEventListener('input', doSearch);
   document.getElementById('cat-filter').addEventListener('change', doSearch);
-
-  // Native folder picker
-  function browseFolder() {
-    const btn = document.querySelector('button[onclick="browseFolder()"]');
-    btn.disabled = true;
-    btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin mr-1"></i> Abriendo…';
-    fetch('/api/browse-folder')
-      .then(r => r.json())
-      .then(d => {
-        if (d.path) document.getElementById('scan-path').value = d.path;
-      })
-      .catch(() => {})
-      .finally(() => {
-        btn.disabled = false;
-        btn.innerHTML = '<i class="fa-solid fa-folder-open mr-1"></i> Examinar…';
-      });
-  }
 
   // Enter in path input
   document.getElementById('scan-path').addEventListener('keydown', e => { if (e.key === 'Enter') startScan(); });
