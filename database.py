@@ -22,6 +22,36 @@ def get_connection():
     return conn
 
 
+# SQLite authorizer action codes (from sqlite3.h)
+_SQLITE_READ     = 20
+_SQLITE_SELECT   = 21
+_SQLITE_FUNCTION = 31
+_SQLITE_OK       = 0
+_SQLITE_DENY     = 1
+
+
+def _readonly_authorizer(action_code, arg1, arg2, db_name, trigger_name):
+    """Allow only read operations; deny everything else."""
+    if action_code in (_SQLITE_SELECT, _SQLITE_READ, _SQLITE_FUNCTION):
+        return _SQLITE_OK
+    return _SQLITE_DENY
+
+
+def get_readonly_connection():
+    """Open DB in URI read-only mode with a write-denying authorizer.
+
+    Two layers of enforcement:
+    - mode=ro   → OS-level read-only file open; writes fail at the kernel
+    - authorizer → denies non-read opcodes at SQL compile time, before execution
+    """
+    conn = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True)
+    conn.row_factory = sqlite3.Row
+    # Set busy_timeout BEFORE installing the authorizer (PRAGMA would be denied after)
+    conn.execute("PRAGMA busy_timeout = 5000")
+    conn.set_authorizer(_readonly_authorizer)
+    return conn
+
+
 def create_tables():
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     conn = get_connection()
