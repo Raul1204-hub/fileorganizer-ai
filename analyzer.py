@@ -1,10 +1,12 @@
 import json
+import re
 import time
 import zipfile
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Callable
 
+import openpyxl
 import pdfplumber
 
 from config import ANALYSIS_MODEL
@@ -14,7 +16,6 @@ from ollama_client import call_ollama
 logger = get_logger("fileorganizer.analyzer")
 
 _DOCX_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
-_XLSX_NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
 
 # ── Validation constants ──────────────────────────────────────────────────────
 
@@ -33,6 +34,9 @@ _ANALYSIS_SCHEMA = {
     "required": ["categoria", "etiquetas", "resumen"],
 }
 
+# .doc legacy heuristic: extracted text must have this fraction of alphabetic chars
+_DOC_ALPHA_RATIO_MIN = 0.45
+
 
 # ── text extraction ───────────────────────────────────────────────────────────
 
@@ -50,6 +54,7 @@ def extract_text_pdf(path: Path) -> str:
 
 
 def extract_text_docx(path: Path) -> str:
+    """Extract text from modern OOXML .docx (ZIP-based)."""
     try:
         with zipfile.ZipFile(path) as z:
             if "word/document.xml" not in z.namelist():
@@ -67,19 +72,72 @@ def extract_text_docx(path: Path) -> str:
         return ""
 
 
-def extract_text_xlsx(path: Path) -> str:
+def extract_text_doc_legacy(path: Path) -> str:
+    """Best-effort extraction for legacy OLE2 .doc binary format.
+
+    OLE2 is not ZIP-based so zipfile cannot read it. Instead, decode the file
+    as latin-1 and extract printable sequences (like the UNIX 'strings' tool).
+    Apply an alphabetic-ratio heuristic to discard noise.
+    Always logs a warning because extraction quality is degraded.
+    """
     try:
-        with zipfile.ZipFile(path) as z:
-            if "xl/sharedStrings.xml" not in z.namelist():
-                return ""
-            with z.open("xl/sharedStrings.xml") as f:
-                root = ET.parse(f).getroot()
-                texts = [
-                    t.text
-                    for t in root.iter(f"{{{_XLSX_NS}}}t")
-                    if t.text
-                ]
-                return " ".join(texts[:300])
+        raw = path.read_bytes()
+        # latin-1 decode never fails: every byte maps to a code point
+        text = raw.decode("latin-1")
+        # Printable ASCII + Latin-1 supplement, minimum 5 chars
+        sequences = re.findall(r"[ -~\xa0-\xff]{5,}", text)
+        result = " ".join(s.strip() for s in sequences if s.strip())
+    except Exception as e:
+        logger.warning("extract_doc_legacy | %s | %s", path, e)
+        return ""
+
+    if not result:
+        return ""
+
+    alpha_count = sum(1 for c in result if c.isalpha())
+    ratio = alpha_count / len(result)
+
+    if ratio < _DOC_ALPHA_RATIO_MIN:
+        logger.warning(
+            "extract_doc_legacy | %s | discarded — alpha ratio %.2f below threshold "
+            "(likely binary noise)",
+            path, ratio,
+        )
+        return ""
+
+    logger.warning(
+        "extract_doc_legacy | %s | degraded OLE2 extraction — alpha %.0f%%, %d chars extracted",
+        path, ratio * 100, len(result),
+    )
+    return result[:4000]
+
+
+def extract_text_xlsx(path: Path) -> str:
+    """Extract cell values from .xlsx using openpyxl.
+
+    Reads the first 100 rows of the active sheet in read-only / data-only mode
+    so formula results (numbers, dates) are included, not the formula strings.
+    """
+    try:
+        wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
+        ws = wb.active
+        if ws is None:
+            ws = wb.worksheets[0] if wb.worksheets else None
+        if ws is None:
+            wb.close()
+            return ""
+
+        rows: list[str] = []
+        for i, row in enumerate(ws.iter_rows(values_only=True), 1):
+            if i > 100:
+                break
+            cells = [str(c) if c is not None else "" for c in row]
+            line = "\t".join(cells).strip()
+            if line:
+                rows.append(line)
+
+        wb.close()
+        return "\n".join(rows)[:4000]
     except Exception as e:
         logger.warning("extract_xlsx | %s | %s", path, e)
         return ""
@@ -97,8 +155,11 @@ def extract_text(path: Path, extension: str) -> str:
     ext = extension.lower()
     if ext == ".pdf":
         return extract_text_pdf(path)
-    if ext in (".docx", ".doc"):
+    if ext == ".docx":
         return extract_text_docx(path)
+    if ext == ".doc":
+        # Legacy OLE2 binary format — separate degraded extractor
+        return extract_text_doc_legacy(path)
     if ext == ".xlsx":
         return extract_text_xlsx(path)
     if ext in (".txt", ".odt", ".csv"):
