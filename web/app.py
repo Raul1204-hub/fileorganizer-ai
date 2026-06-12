@@ -262,33 +262,14 @@ def api_scan_status():
 
 @app.route("/api/browse-folder")
 def api_browse_folder():
-    """Open the native Windows folder picker via PowerShell (thread-safe)."""
-    import subprocess
-    script = (
-        "Add-Type -AssemblyName System.Windows.Forms; "
-        "$d = New-Object System.Windows.Forms.FolderBrowserDialog; "
-        "$d.Description = 'Seleccionar carpeta para escanear'; "
-        "$d.ShowNewFolderButton = $true; "
-        "if ($d.ShowDialog() -eq 'OK') { Write-Output $d.SelectedPath }"
-    )
-    script = (
-        "Add-Type -AssemblyName System.Windows.Forms; "
-        "$form = New-Object System.Windows.Forms.Form; "
-        "$form.TopMost = $true; $form.Show(); $form.Hide(); "
-        "$d = New-Object System.Windows.Forms.FolderBrowserDialog; "
-        "$d.Description = 'Seleccionar carpeta para escanear'; "
-        "$d.ShowNewFolderButton = $true; "
-        "if ($d.ShowDialog($form) -eq 'OK') { Write-Output $d.SelectedPath }; "
-        "$form.Dispose()"
-    )
-    try:
-        result = subprocess.run(
-            ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
-            capture_output=True, text=True, timeout=120,
-        )
-        folder = result.stdout.strip()
-    except Exception:
-        folder = ""
+    """Open the native Windows folder picker and return the selected path."""
+    import tkinter as tk
+    from tkinter import filedialog
+    root = tk.Tk()
+    root.withdraw()
+    root.wm_attributes("-topmost", 1)
+    folder = filedialog.askdirectory(parent=root, title="Seleccionar carpeta para escanear")
+    root.destroy()
     return jsonify({"path": folder})
 
 
