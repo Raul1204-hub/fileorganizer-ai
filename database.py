@@ -77,6 +77,7 @@ def create_tables():
             hash_blake2        TEXT DEFAULT '',
             categoria_id       INTEGER REFERENCES categorias(id),
             resumen_ia         TEXT,
+            texto_via          TEXT,
             existe             INTEGER DEFAULT 1
         );
 
@@ -159,6 +160,8 @@ def migrate_schema():
         cur.execute("UPDATE archivos SET existe = 1 WHERE existe IS NULL")
     if "hash_blake2" not in existing_cols:
         cur.execute("ALTER TABLE archivos ADD COLUMN hash_blake2 TEXT DEFAULT ''")
+    if "texto_via" not in existing_cols:
+        cur.execute("ALTER TABLE archivos ADD COLUMN texto_via TEXT")
     conn.commit()
     conn.close()
 
@@ -249,16 +252,19 @@ def update_archivo_ruta(archivo_id, nueva_ruta):
     conn.close()
 
 
-def update_archivo_resumen(archivo_id, resumen_ia, categoria_id=None):
+def update_archivo_resumen(archivo_id, resumen_ia, categoria_id=None, texto_via=None):
     conn = get_connection()
     cur = conn.cursor()
+    sets = ["resumen_ia = ?"]
+    params: list = [resumen_ia]
     if categoria_id:
-        cur.execute(
-            "UPDATE archivos SET resumen_ia = ?, categoria_id = ? WHERE id = ?",
-            (resumen_ia, categoria_id, archivo_id),
-        )
-    else:
-        cur.execute("UPDATE archivos SET resumen_ia = ? WHERE id = ?", (resumen_ia, archivo_id))
+        sets.append("categoria_id = ?")
+        params.append(categoria_id)
+    if texto_via:
+        sets.append("texto_via = ?")
+        params.append(texto_via)
+    params.append(archivo_id)
+    cur.execute(f"UPDATE archivos SET {', '.join(sets)} WHERE id = ?", params)
     conn.commit()
     conn.close()
 

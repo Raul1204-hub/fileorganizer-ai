@@ -1,3 +1,4 @@
+import base64
 import json
 import re
 import xml.etree.ElementTree as ET
@@ -8,9 +9,20 @@ from typing import Callable
 import openpyxl
 import pdfplumber
 
-from config import ANALYSIS_MODEL
+from config import ANALYSIS_MODEL, OCR_LANGUAGES, OCR_MIN_CHARS, VISION_MAX_MB, VISION_MAX_SIDE, VISION_MODEL
 from log import get_logger
-from ollama_client import call_ollama
+from ollama_client import call_ollama, call_ollama_vision
+from scanner import IMG_EXTS
+
+try:
+    from PIL import Image as _PIL_Image
+
+    _PILLOW_AVAILABLE = True
+except ImportError:
+    _PIL_Image = None  # type: ignore[assignment]
+    _PILLOW_AVAILABLE = False
+
+_TESSERACT_AVAILABLE: bool | None = None
 
 logger = get_logger("fileorganizer.analyzer")
 
@@ -44,6 +56,149 @@ _ANALYSIS_SCHEMA = {
 
 # .doc legacy heuristic: extracted text must have this fraction of alphabetic chars
 _DOC_ALPHA_RATIO_MIN = 0.45
+
+_VISION_PROMPT = (
+    "Analyze this image. Respond with ONLY a JSON object:\n"
+    '{"categoria": "...", "etiquetas": ["tag1", ...], "resumen": "..."}\n\n'
+    "categoria options: Imágenes, Documentos, Código, Datos, Desconocido\n"
+    "etiquetas: up to 5 descriptive tags in Spanish\n"
+    "resumen: 1-2 sentences in Spanish describing what the image shows\n"
+    "Output JSON only, no explanation."
+)
+
+
+# ── Vision helpers ────────────────────────────────────────────────────────────
+
+
+def _resize_image(path: Path, max_side: int) -> bytes | None:
+    """Load image, resize so the longest side <= max_side, return JPEG bytes."""
+    if not _PILLOW_AVAILABLE:
+        logger.warning("vision | Pillow not installed — pip install Pillow")
+        return None
+    import io
+
+    try:
+        with _PIL_Image.open(path) as img:
+            img = img.convert("RGB")
+            w, h = img.size
+            if max(w, h) > max_side:
+                ratio = max_side / max(w, h)
+                img = img.resize((int(w * ratio), int(h * ratio)), _PIL_Image.LANCZOS)
+            buf = io.BytesIO()
+            img.save(buf, format="JPEG", quality=85)
+            return buf.getvalue()
+    except Exception as exc:
+        logger.warning("image_resize | %s | %s", path.name, exc)
+        return None
+
+
+def analyze_image(
+    path: Path,
+    on_failure: Callable[[str], None] | None = None,
+) -> dict:
+    """Analyze an image with the configured vision model via Ollama.
+
+    Returns {categoria, etiquetas, resumen, _text_len=0, _texto_via='vision'}
+    or {} on failure (model missing, too large, resize error).
+    """
+    size_mb = path.stat().st_size / (1024 * 1024)
+    if size_mb > VISION_MAX_MB:
+        logger.debug("vision | skip_large | %s | %.1f MB > %.0f MB", path.name, size_mb, VISION_MAX_MB)
+        if on_failure:
+            on_failure("extraction")
+        return {}
+
+    img_bytes = _resize_image(path, VISION_MAX_SIDE)
+    if not img_bytes:
+        if on_failure:
+            on_failure("extraction")
+        return {}
+
+    b64 = base64.b64encode(img_bytes).decode("ascii")
+
+    for _attempt in range(2):
+        raw = call_ollama_vision(VISION_MODEL, _VISION_PROMPT, b64, fmt="json")
+        if not raw:
+            continue
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            logger.warning("vision_parse | %s | attempt=%d | %s", path.name, _attempt + 1, exc)
+            continue
+        result = _validate_analysis(data)
+        if result and result.get("resumen"):
+            result["_texto_via"] = "vision"
+            result["_text_len"] = 0
+            return result
+
+    logger.warning("vision_failed | %s", path.name)
+    if on_failure:
+        on_failure("ollama")
+    return {}
+
+
+# ── OCR helpers ───────────────────────────────────────────────────────────────
+
+
+def _check_tesseract() -> bool:
+    """Check tesseract availability once and cache the result."""
+    global _TESSERACT_AVAILABLE
+    if _TESSERACT_AVAILABLE is not None:
+        return _TESSERACT_AVAILABLE
+    try:
+        import pytesseract
+
+        pytesseract.get_tesseract_version()
+        _TESSERACT_AVAILABLE = True
+    except Exception:
+        logger.warning(
+            "ocr | Tesseract not found in PATH — OCR disabled. "
+            "Install from: https://github.com/UB-Mannheim/tesseract/wiki"
+        )
+        _TESSERACT_AVAILABLE = False
+    return _TESSERACT_AVAILABLE
+
+
+def _ocr_pdf(path: Path) -> str:
+    """Render the first 3 pages of a PDF with pypdfium2 and OCR with pytesseract.
+
+    Returns '' if any dependency is missing or rendering fails.
+    """
+    try:
+        import pypdfium2 as pdfium
+    except ImportError:
+        logger.warning("ocr | pypdfium2 not installed — pip install pypdfium2")
+        return ""
+    try:
+        import pytesseract
+    except ImportError:
+        return ""
+
+    texts: list[str] = []
+    try:
+        doc = pdfium.PdfDocument(str(path))
+        pages_to_ocr = min(len(doc), 3)
+        if pages_to_ocr == 0:
+            doc.close()
+            return ""
+        for i in range(pages_to_ocr):
+            page = doc[i]
+            bitmap = page.render(scale=200 / 72)
+            pil_img = bitmap.to_pil()
+            texts.append(pytesseract.image_to_string(pil_img, lang=OCR_LANGUAGES))
+        doc.close()
+    except Exception as exc:
+        logger.warning("ocr | pdf_render | %s | %s", path.name, exc)
+        return ""
+
+    return "\n\n".join(texts).strip()[:4000]
+
+
+def _try_ocr_pdf(path: Path) -> str:
+    """Run OCR only when tesseract is available; return '' otherwise."""
+    if not _check_tesseract():
+        return ""
+    return _ocr_pdf(path)
 
 
 # ── text extraction ───────────────────────────────────────────────────────────
@@ -250,17 +405,36 @@ def analyze_file(
     extension: str,
     on_failure: Callable[[str], None] | None = None,
 ) -> dict:
-    """Extract text and analyze with Ollama.
+    """Extract text (or use vision) and analyze with Ollama.
 
     Parameters
     ----------
     on_failure : optional callback(reason: str) where reason is
-        'extraction' (no/empty text) or 'ollama' (model returned nothing useful).
+        'extraction' (no/empty text, image too large, resize failed) or
+        'ollama' (model returned nothing useful).
 
-    Returns a dict with {categoria, etiquetas, resumen, _text_len} on success,
-    or {} on failure.
+    Returns a dict with {categoria, etiquetas, resumen, _text_len, _texto_via}
+    on success, or {} on failure.  _texto_via is 'pdf', 'ocr', or 'vision';
+    absent for non-PDF text documents.
     """
+    ext = extension.lower()
+
+    # ── Image path (vision model) ─────────────────────────────────────────────
+    if ext in IMG_EXTS:
+        return analyze_image(path, on_failure=on_failure)
+
+    # ── Document path ─────────────────────────────────────────────────────────
     text = extract_text(path, extension)
+    texto_via: str | None = None
+
+    if ext == ".pdf":
+        texto_via = "pdf"
+        if len(text.strip()) < OCR_MIN_CHARS:
+            ocr_text = _try_ocr_pdf(path)
+            if ocr_text:
+                text = ocr_text
+                texto_via = "ocr"
+
     if not text.strip():
         if on_failure:
             on_failure("extraction")
@@ -273,4 +447,6 @@ def analyze_file(
         return {}
 
     result["_text_len"] = len(text)
+    if texto_via is not None:
+        result["_texto_via"] = texto_via
     return result

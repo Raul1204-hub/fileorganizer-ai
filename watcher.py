@@ -38,6 +38,24 @@ logger = get_logger("fileorganizer.watcher")
 
 _DEBOUNCE_SECONDS = 3.0
 
+# Vision model availability — checked once lazily on first image event
+_vision_available: bool | None = None
+
+
+def _check_vision_model() -> bool:
+    """Return True if the vision model is reachable and installed."""
+    global _vision_available
+    if _vision_available is None:
+        import ollama_client
+        from config import VISION_MODEL
+
+        check = ollama_client.check_ollama([VISION_MODEL])
+        _vision_available = check["running"] and not check["missing"]
+        if not _vision_available:
+            logger.info("watcher | vision model not available — image analysis disabled")
+    return _vision_available
+
+
 # Filename / component patterns to ignore (fnmatch-style)
 _IGNORE_PATTERNS: frozenset[str] = frozenset(
     {
@@ -328,6 +346,7 @@ class WatcherManager:
 
         ext = meta["extension"]
         is_doc = ext in scanner.DOC_EXTS
+        is_img = ext in scanner.IMG_EXTS and _check_vision_model()
 
         hash_blake2 = scanner.compute_blake2b(p) if is_doc else ""
 
@@ -367,11 +386,18 @@ class WatcherManager:
         logger.info("watcher | indexed | %s", p.name)
         self._record_event(f"Indexado: {p.name}")
 
-        if not is_doc:
+        if not is_doc and not is_img:
             return
 
-        # Check analysis cache by BLAKE2b hash
-        if hash_blake2:
+        # Size guard for images
+        if is_img and not is_doc:
+            from config import VISION_MAX_MB
+
+            if meta["tamaño_bytes"] > VISION_MAX_MB * 1024 * 1024:
+                return
+
+        # Check analysis cache by BLAKE2b hash (docs only)
+        if is_doc and hash_blake2:
             cached = database.get_resumen_by_hash(hash_blake2)
             if cached and cached.get("resumen_ia"):
                 database.update_archivo_resumen(archivo_id, cached["resumen_ia"])
@@ -382,8 +408,11 @@ class WatcherManager:
         result = analyzer.analyze_file(p, ext)
         if result:
             result.pop("_text_len", None)
+            texto_via = result.pop("_texto_via", None)
             cat_id = scanner.CATEGORIA_IDS.get(result.get("categoria", ""), None)
-            database.update_archivo_resumen(archivo_id, result.get("resumen", ""), cat_id)
+            database.update_archivo_resumen(
+                archivo_id, result.get("resumen", ""), cat_id, texto_via=texto_via
+            )
             etiquetas_result: list[str] = []
             for tag in result.get("etiquetas", []):
                 if tag:

@@ -18,6 +18,15 @@ SQL_MODEL = os.environ.get("FORG_SQL_MODEL", "qwen2.5-coder:7b")  # Text-to-SQL
 RESPONSE_MODEL = os.environ.get("FORG_RESPONSE_MODEL", "qwen3:8b")  # chat answers
 EMBED_MODEL = os.environ.get("FORG_EMBED_MODEL", "nomic-embed-text")  # embeddings
 
+# ── Vision model (optional — missing = image analysis skipped) ────────────────
+VISION_MODEL = os.environ.get("FORG_VISION_MODEL", "moondream")
+VISION_MAX_SIDE = int(os.environ.get("FORG_VISION_MAX_SIDE", "1024"))
+VISION_MAX_MB = float(os.environ.get("FORG_VISION_MAX_MB", "15.0"))
+
+# ── OCR (optional — requires Tesseract in PATH) ───────────────────────────────
+OCR_LANGUAGES = os.environ.get("FORG_OCR_LANGUAGES", "spa+eng")
+OCR_MIN_CHARS = int(os.environ.get("FORG_OCR_MIN_CHARS", "50"))
+
 # ── Semantic search ────────────────────────────────────────────────────────────
 SEMANTIC_THRESHOLD = float(os.environ.get("FORG_SEMANTIC_THRESHOLD", "0.40"))
 SEMANTIC_TOP_K = int(os.environ.get("FORG_SEMANTIC_TOP_K", "20"))

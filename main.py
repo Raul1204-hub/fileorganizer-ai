@@ -24,7 +24,7 @@ def cli_scan(target_path: str) -> None:
     import ollama_client
     import recommendations
     import scanner
-    from config import ANALYSIS_MODEL
+    from config import ANALYSIS_MODEL, VISION_MAX_MB, VISION_MODEL
 
     print(f"[+] Target: {target_path}")
     database.create_tables()
@@ -95,6 +95,12 @@ def cli_scan(target_path: str) -> None:
     savings_pct = round(100 * (1 - n_hashed[0] / max(len(candidates), 1)))
     print(f"    Hasheados: {n_hashed[0]} de {len(candidates)} ({savings_pct}% ahorro)")
 
+    # ── Check vision model once before building to_analyze ───────────────────
+    _vision_check = ollama_client.check_ollama([VISION_MODEL])
+    _vision_available = _vision_check["running"] and not _vision_check["missing"]
+    if not _vision_available:
+        print(f"[i] Vision model '{VISION_MODEL}' not available — image analysis skipped")
+
     # ── Insert new files ──────────────────────────────────────────────────────
     print(f"[+] Inserting {len(new_files)} new file(s) into DB…")
     cache_hits = 0
@@ -122,6 +128,9 @@ def cli_scan(target_path: str) -> None:
                 else:
                     to_analyze[f["ruta_actual"]] = aid
             else:
+                to_analyze[f["ruta_actual"]] = aid
+        elif f["extension"] in scanner.IMG_EXTS and _vision_available:
+            if f["tamaño_bytes"] <= VISION_MAX_MB * 1024 * 1024:
                 to_analyze[f["ruta_actual"]] = aid
 
     # ── Update modified files ─────────────────────────────────────────────────
@@ -152,6 +161,9 @@ def cli_scan(target_path: str) -> None:
                     to_analyze[f["ruta_actual"]] = f["db_id"]
             else:
                 to_analyze[f["ruta_actual"]] = f["db_id"]
+        elif f["extension"] in scanner.IMG_EXTS and _vision_available:
+            if f["tamaño_bytes"] <= VISION_MAX_MB * 1024 * 1024:
+                to_analyze[f["ruta_actual"]] = f["db_id"]
 
     # ── Ollama pre-flight before document analysis ────────────────────────────
     print(f"[+] Analysing {len(to_analyze)} document(s) with Ollama ({ANALYSIS_MODEL})…")
@@ -181,8 +193,10 @@ def cli_scan(target_path: str) -> None:
         result = analyzer.analyze_file(Path(ruta), Path(ruta).suffix.lower(), on_failure=_on_fail)
         if result:
             n_analyzed[0] += 1
+            result.pop("_text_len", None)
+            texto_via = result.pop("_texto_via", None)
             cat_id = scanner.CATEGORIA_IDS.get(result.get("categoria", ""), None)
-            database.update_archivo_resumen(aid, result.get("resumen", ""), cat_id)
+            database.update_archivo_resumen(aid, result.get("resumen", ""), cat_id, texto_via=texto_via)
             for tag in result.get("etiquetas", []):
                 if tag:
                     database.insert_etiqueta(aid, str(tag))

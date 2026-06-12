@@ -12,7 +12,8 @@ DB_SCHEMA = """
 Tables:
   categorias(id, nombre, color, icono)
   archivos(id, nombre, extension, ruta_actual, tamaño_bytes, fecha_modificacion,
-           fecha_indexado, hash_blake2, categoria_id, resumen_ia)
+           fecha_indexado, hash_blake2, categoria_id, resumen_ia,
+           texto_via TEXT -- 'pdf'|'ocr'|'vision'|NULL)
   etiquetas(id, archivo_id, etiqueta)
   historial(id, archivo_id, ruta_origen, ruta_destino, operacion, fecha, revertido)
   recomendaciones(id, archivo_id, tipo, mensaje, fecha, vista, descartada)

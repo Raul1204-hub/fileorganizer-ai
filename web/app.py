@@ -26,7 +26,7 @@ import organizer
 import recommendations
 import scanner
 import watcher as _watcher_module
-from config import EMBED_MODEL
+from config import EMBED_MODEL, VISION_MAX_MB, VISION_MODEL
 
 app = Flask(__name__, template_folder="templates")
 app.secret_key = "fileorganizer-ai-secret-2024"
@@ -347,6 +347,12 @@ def _run_scan(target_path: str):
             is_cancelled=lambda: _ss.cancelled,
         )
 
+        # ── Check optional models once (vision + embed) ───────────────────────
+        _vision_check = ollama_client.check_ollama([VISION_MODEL])
+        _vision_available = _vision_check["running"] and not _vision_check["missing"]
+        if not _vision_available:
+            _wlog.warning("vision model '%s' not available — image analysis skipped", VISION_MODEL)
+
         # ── Insert new files ──────────────────────────────────────────────────
         cache_hits = 0
         to_analyze: dict[str, int] = {}
@@ -375,6 +381,9 @@ def _run_scan(target_path: str):
                     else:
                         to_analyze[f["ruta_actual"]] = aid
                 else:
+                    to_analyze[f["ruta_actual"]] = aid
+            elif f["extension"] in scanner.IMG_EXTS and _vision_available:
+                if f["tamaño_bytes"] <= VISION_MAX_MB * 1024 * 1024:
                     to_analyze[f["ruta_actual"]] = aid
 
         # ── Update modified files ─────────────────────────────────────────────
@@ -405,6 +414,9 @@ def _run_scan(target_path: str):
                     else:
                         to_analyze[f["ruta_actual"]] = f["db_id"]
                 else:
+                    to_analyze[f["ruta_actual"]] = f["db_id"]
+            elif f["extension"] in scanner.IMG_EXTS and _vision_available:
+                if f["tamaño_bytes"] <= VISION_MAX_MB * 1024 * 1024:
                     to_analyze[f["ruta_actual"]] = f["db_id"]
 
         # ── Analysis phase (Ollama, weighted EMA) ─────────────────────────────
@@ -439,6 +451,7 @@ def _run_scan(target_path: str):
             result = analyzer.analyze_file(Path(ruta), Path(ruta).suffix.lower(), on_failure=_on_failure)
             elapsed = time.monotonic() - t0
             text_len = result.pop("_text_len", 0) if result else 0
+            texto_via = result.pop("_texto_via", None) if result else None
 
             with _lock:
                 _ss.hechos += 1
@@ -458,7 +471,7 @@ def _run_scan(target_path: str):
 
             if result:
                 cat_id = scanner.CATEGORIA_IDS.get(result.get("categoria", ""), None)
-                database.update_archivo_resumen(aid, result.get("resumen", ""), cat_id)
+                database.update_archivo_resumen(aid, result.get("resumen", ""), cat_id, texto_via=texto_via)
                 etiquetas_result: list[str] = []
                 for tag in result.get("etiquetas", []):
                     if tag:

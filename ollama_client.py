@@ -112,6 +112,37 @@ def embed_text(text: str, model: str | None = None, timeout: int = 30) -> list[f
         return []
 
 
+def call_ollama_vision(
+    model: str,
+    prompt: str,
+    image_b64: str,
+    timeout: int | None = None,
+    fmt: str | dict | None = None,
+) -> str:
+    """POST to /generate with a base64-encoded image (vision models: moondream, llava, etc.).
+
+    Returns '' on any failure — never raises.
+    """
+    if timeout is None:
+        timeout = OLLAMA_TIMEOUT
+    payload: dict = {"model": model, "prompt": prompt, "stream": False, "images": [image_b64]}
+    if fmt is not None:
+        payload["format"] = fmt
+    t0 = time.monotonic()
+    try:
+        resp = requests.post(f"{OLLAMA_BASE}/generate", json=payload, timeout=timeout)
+        resp.raise_for_status()
+        raw = resp.json().get("response", "").strip()
+        logger.debug("ollama_vision | model=%s | %.2fs | resp=%s", model, time.monotonic() - t0, raw[:200])
+        return raw
+    except requests.exceptions.ConnectionError:
+        logger.warning("ollama_vision | model=%s | not running", model)
+        return ""
+    except Exception as exc:
+        logger.warning("ollama_vision | model=%s | %.2fs | %s", model, time.monotonic() - t0, exc)
+        return ""
+
+
 def pull_commands(missing: list[str]) -> str:
     """Return formatted 'ollama pull …' lines ready to print."""
     return "\n".join(f"  ollama pull {m}" for m in missing)

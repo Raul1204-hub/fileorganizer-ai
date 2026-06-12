@@ -36,10 +36,68 @@ python main.py
 
 Opens automatically at <http://localhost:5000>
 
+## Optional features
+
+### Image analysis (vision model)
+
+FileOrganizer AI can describe images (JPG, JPEG, PNG, WEBP up to 15 MB) using a
+local vision model. If the model is not installed the scan continues normally.
+
+```bash
+ollama pull moondream        # ~1.7 GB, lightweight default
+# or a larger model:
+ollama pull llava:7b
+```
+
+Override the model via environment variable:
+
+```
+FORG_VISION_MODEL=llava:7b python main.py
+```
+
+### OCR for scanned PDFs
+
+PDFs that contain only scanned images (no machine-readable text layer) can be
+processed with Tesseract OCR. Both runtime dependencies are optional — if
+Tesseract is not found in PATH the scan continues without OCR.
+
+**1. Install Tesseract on Windows**
+
+Download the installer from
+[UB Mannheim Tesseract](https://github.com/UB-Mannheim/tesseract/wiki)
+(choose the latest 64-bit `.exe`). During setup, enable the
+**Spanish** and **English** language packs.
+
+Add Tesseract to your PATH (default install location):
+
+```
+C:\Program Files\Tesseract-OCR
+```
+
+Verify:
+
+```bash
+tesseract --version
+```
+
+**2. Install Python bindings (already in requirements.txt)**
+
+```bash
+pip install pytesseract pypdfium2
+```
+
+Override OCR languages (default `spa+eng`):
+
+```
+FORG_OCR_LANGUAGES=eng python main.py
+```
+
 ## Features
 
 - Recursive file scan with extension-based classification
 - AI-powered document analysis (PDF, DOCX, DOC, TXT, XLSX, CSV) via Ollama
+- Image analysis (JPG, JPEG, PNG, WEBP) via a local vision model — optional
+- OCR fallback for scanned PDFs with no machine-readable text — optional
 - Incremental scan — only re-processes new or modified files
 - Duplicate detection via selective BLAKE2b hashing
 - 7 automated recommendation rules

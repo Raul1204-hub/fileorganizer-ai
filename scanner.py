@@ -17,6 +17,9 @@ logger = get_logger("fileorganizer.scanner")
 # Document extensions that always get hashed (BLAKE2b is the AI analysis cache key)
 DOC_EXTS = frozenset({".pdf", ".docx", ".doc", ".txt", ".odt", ".xlsx", ".csv"})
 
+# Image extensions eligible for vision-model analysis
+IMG_EXTS: frozenset[str] = frozenset({".jpg", ".jpeg", ".png", ".webp"})
+
 _PREFIX_BYTES = 8192  # bytes read for quick-compare before full hash
 
 EXTENSION_MAP: dict[str, str] = {

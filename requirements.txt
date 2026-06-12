@@ -1,6 +1,9 @@
 flask
 openpyxl
 pdfplumber
+Pillow
+pypdfium2
+pytesseract
 python-magic-bin; sys_platform == "win32"
 python-magic; sys_platform != "win32"
 requests
