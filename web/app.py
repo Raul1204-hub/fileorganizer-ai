@@ -101,6 +101,32 @@ def explorar():
     )
 
 
+@app.route("/organizar")
+def organizar():
+    archivos = database.get_all_archivos()
+    categorias = {c["id"]: c for c in database.get_categorias()}
+
+    # Group files by category, skip files that are already in a categorized subfolder
+    from collections import defaultdict
+    grupos: dict[str, list] = defaultdict(list)
+    for a in archivos:
+        cat = categorias.get(a["categoria_id"])
+        cat_nombre = cat["nombre"] if cat else "Desconocido"
+        grupos[cat_nombre].append(a)
+
+    # Stats
+    total = len(archivos)
+    total_size = sum(a.get("tamaño_bytes") or 0 for a in archivos)
+
+    return render_template(
+        "organizar.html",
+        grupos=dict(grupos),
+        categorias=categorias,
+        total=total,
+        total_size=total_size,
+    )
+
+
 @app.route("/archivo/<int:archivo_id>")
 def archivo_detail(archivo_id):
     archivo = database.get_archivo(archivo_id)

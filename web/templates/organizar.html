@@ -1,0 +1,288 @@
+{% extends "base.html" %}
+{% block title %}Organizar archivos — FileOrganizer AI{% endblock %}
+{% block page_title %}Organizar archivos{% endblock %}
+
+{% block content %}
+
+<!-- ── Cabecera informativa ────────────────────────────────────────────────── -->
+<div class="bg-gradient-to-r from-indigo-600 to-violet-600 rounded-2xl p-5 text-white mb-6 flex items-center justify-between flex-wrap gap-4">
+  <div>
+    <h2 class="font-bold text-lg mb-1">Organización por categorías</h2>
+    <p class="text-indigo-100 text-sm">
+      Los archivos se moverán a <code class="bg-white/20 px-1 rounded">[Destino] / [Categoría] / nombre_original</code>.
+      Los nombres <strong>no se modifican</strong>. Puedes deshacer todo desde Backup &amp; Undo.
+    </p>
+  </div>
+  <div class="text-right shrink-0">
+    <div class="text-2xl font-bold">{{ total }}</div>
+    <div class="text-indigo-200 text-xs">archivos indexados</div>
+    <div class="text-indigo-200 text-xs">{{ total_size | format_size }}</div>
+  </div>
+</div>
+
+{% if total == 0 %}
+<div class="bg-white dark:bg-gray-900 rounded-2xl p-12 text-center shadow-sm border border-gray-100 dark:border-gray-800">
+  <i class="fa-solid fa-folder-open text-5xl text-gray-300 dark:text-gray-600 mb-4 block"></i>
+  <p class="text-gray-500">No hay archivos indexados. Inicia un escaneo desde el Dashboard primero.</p>
+  <a href="/" class="mt-4 inline-block px-4 py-2 bg-indigo-600 text-white rounded-xl text-sm font-medium hover:bg-indigo-700 transition">
+    Ir al Dashboard
+  </a>
+</div>
+{% else %}
+
+<!-- ── Selector de destino ────────────────────────────────────────────────── -->
+<div class="bg-white dark:bg-gray-900 rounded-2xl p-5 shadow-sm border border-gray-100 dark:border-gray-800 mb-6">
+  <h3 class="font-semibold text-sm text-gray-700 dark:text-gray-300 mb-3">
+    <i class="fa-solid fa-folder-plus text-amber-500 mr-1"></i> Carpeta de destino
+  </h3>
+  <div class="flex gap-2">
+    <input id="target-base" type="text" placeholder="C:\Users\Raul\Archivos Organizados"
+           class="flex-1 border border-gray-200 dark:border-gray-700 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 bg-white dark:bg-gray-800 dark:text-gray-200">
+    <button type="button" id="browse-dest-btn" onclick="browseDestino()"
+            class="px-4 py-2.5 border border-gray-200 dark:border-gray-700 rounded-xl text-sm font-medium text-gray-600 dark:text-gray-400 hover:bg-indigo-50 dark:hover:bg-gray-700 hover:text-indigo-600 transition whitespace-nowrap">
+      <i class="fa-solid fa-folder-open mr-1"></i> Examinar…
+    </button>
+  </div>
+  <p class="text-xs text-gray-400 mt-2">
+    <i class="fa-solid fa-info-circle mr-1"></i>
+    Se crearán subcarpetas automáticamente: Documentos, Imágenes, Vídeo, etc.
+  </p>
+</div>
+
+<!-- ── Controles globales ──────────────────────────────────────────────────── -->
+<div class="flex items-center justify-between mb-4 flex-wrap gap-3">
+  <div class="flex items-center gap-3">
+    <button onclick="selectAll(true)"
+            class="px-3 py-1.5 text-xs border border-gray-200 dark:border-gray-700 rounded-lg text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-800 transition">
+      <i class="fa-solid fa-check-double mr-1"></i> Seleccionar todo
+    </button>
+    <button onclick="selectAll(false)"
+            class="px-3 py-1.5 text-xs border border-gray-200 dark:border-gray-700 rounded-lg text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-800 transition">
+      <i class="fa-solid fa-xmark mr-1"></i> Deseleccionar todo
+    </button>
+    <span id="selected-count" class="text-xs text-gray-400">0 seleccionados</span>
+  </div>
+  <button onclick="showConfirmModal()"
+          id="organize-btn"
+          class="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-300 dark:disabled:bg-gray-700 disabled:cursor-not-allowed text-white text-sm font-semibold rounded-xl transition flex items-center gap-2">
+    <i class="fa-solid fa-wand-magic-sparkles"></i> Organizar seleccionados
+  </button>
+</div>
+
+<!-- ── Grupos por categoría ───────────────────────────────────────────────── -->
+{% set cat_colors = {
+  'Documentos':'#4F46E5','Imágenes':'#10B981','Audio':'#F59E0B',
+  'Vídeo':'#EF4444','Código':'#8B5CF6','Datos':'#06B6D4',
+  'Comprimidos':'#6B7280','Programas':'#F97316','Desconocido':'#9CA3AF'
+} %}
+{% set cat_icons = {
+  'Documentos':'📄','Imágenes':'🖼️','Audio':'🎵','Vídeo':'🎬',
+  'Código':'💻','Datos':'🗄️','Comprimidos':'📦','Programas':'⚙️','Desconocido':'❓'
+} %}
+
+<div class="space-y-4">
+{% for cat_nombre, archivos in grupos.items() | sort %}
+{% set color = cat_colors.get(cat_nombre, '#9CA3AF') %}
+{% set icon  = cat_icons.get(cat_nombre, '📁') %}
+<div class="bg-white dark:bg-gray-900 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-800 overflow-hidden">
+
+  <!-- Cabecera del grupo -->
+  <div class="flex items-center justify-between px-5 py-3 border-b border-gray-100 dark:border-gray-800 cursor-pointer"
+       onclick="toggleGroup('group-{{ loop.index }}')">
+    <div class="flex items-center gap-3">
+      <input type="checkbox" class="cat-checkbox w-4 h-4 rounded accent-indigo-600 cursor-pointer"
+             data-cat="{{ cat_nombre }}"
+             onclick="event.stopPropagation(); toggleCategory('{{ cat_nombre }}', this.checked)"
+             checked>
+      <span class="text-lg">{{ icon }}</span>
+      <span class="font-semibold text-sm text-gray-900 dark:text-white">{{ cat_nombre }}</span>
+      <span class="badge text-white text-xs" style="background:{{ color }}">{{ archivos|length }} archivos</span>
+      <span class="text-xs text-gray-400">{{ archivos | sum(attribute='tamaño_bytes') | format_size }}</span>
+    </div>
+    <i class="fa-solid fa-chevron-down text-gray-400 text-xs transition-transform" id="chevron-{{ loop.index }}"></i>
+  </div>
+
+  <!-- Lista de archivos -->
+  <div id="group-{{ loop.index }}" class="divide-y divide-gray-50 dark:divide-gray-800">
+    {% for a in archivos %}
+    <label class="flex items-center gap-3 px-5 py-2.5 hover:bg-gray-50 dark:hover:bg-gray-800/50 cursor-pointer transition">
+      <input type="checkbox"
+             class="file-checkbox w-4 h-4 rounded accent-indigo-600"
+             data-cat="{{ cat_nombre }}"
+             data-ruta="{{ a.ruta_actual }}"
+             data-id="{{ a.id }}"
+             checked
+             onchange="updateCount()">
+      <div class="flex-1 min-w-0">
+        <div class="text-sm font-medium text-gray-900 dark:text-white truncate">{{ a.nombre }}</div>
+        <div class="text-xs text-gray-400 font-mono truncate">{{ a.ruta_actual }}</div>
+      </div>
+      <div class="text-xs text-gray-400 shrink-0">{{ a.tamaño_bytes | format_size }}</div>
+    </label>
+    {% endfor %}
+  </div>
+
+</div>
+{% endfor %}
+</div>
+
+{% endif %}
+
+<!-- ── Modal de confirmación ──────────────────────────────────────────────── -->
+<div id="confirm-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
+  <div class="bg-white dark:bg-gray-900 rounded-2xl shadow-2xl p-6 w-full max-w-md mx-4">
+    <div class="flex items-center gap-3 mb-4">
+      <div class="w-10 h-10 bg-indigo-100 dark:bg-indigo-950 rounded-xl flex items-center justify-center">
+        <i class="fa-solid fa-wand-magic-sparkles text-indigo-600 dark:text-indigo-400"></i>
+      </div>
+      <div>
+        <h3 class="font-bold text-gray-900 dark:text-white">Confirmar organización</h3>
+        <p id="modal-summary" class="text-xs text-gray-500 mt-0.5"></p>
+      </div>
+    </div>
+    <div class="bg-amber-50 dark:bg-amber-950 border border-amber-200 dark:border-amber-800 rounded-xl p-3 mb-5 text-xs text-amber-700 dark:text-amber-300">
+      <i class="fa-solid fa-rotate-left mr-1"></i>
+      Puedes deshacer esta operación en cualquier momento desde <strong>Backup &amp; Undo</strong>.
+    </div>
+    <div id="modal-dest" class="text-xs font-mono bg-gray-50 dark:bg-gray-800 rounded-lg p-3 mb-5 text-gray-600 dark:text-gray-400 break-all"></div>
+    <div class="flex gap-3">
+      <button onclick="document.getElementById('confirm-modal').classList.add('hidden')"
+              class="flex-1 py-2.5 border border-gray-200 dark:border-gray-700 rounded-xl text-sm font-medium text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-800 transition">
+        Cancelar
+      </button>
+      <button onclick="executeOrganize()"
+              class="flex-1 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-semibold transition">
+        <i class="fa-solid fa-play mr-1"></i> Mover archivos
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Modal de progreso/resultado ───────────────────────────────────────── -->
+<div id="result-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
+  <div class="bg-white dark:bg-gray-900 rounded-2xl shadow-2xl p-6 w-full max-w-md mx-4">
+    <div id="result-content"></div>
+    <button onclick="location.reload()"
+            class="w-full mt-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-semibold transition">
+      Aceptar
+    </button>
+  </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+  // ── Folder picker ───────────────────────────────────────────────────────────
+  function browseDestino() {
+    const btn = document.getElementById('browse-dest-btn');
+    btn.disabled = true;
+    btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin mr-1"></i> Abriendo…';
+    fetch('/api/browse-folder')
+      .then(r => r.json())
+      .then(d => { if (d.path) document.getElementById('target-base').value = d.path; })
+      .catch(() => {})
+      .finally(() => {
+        btn.disabled = false;
+        btn.innerHTML = '<i class="fa-solid fa-folder-open mr-1"></i> Examinar…';
+      });
+  }
+
+  // ── Toggle group visibility ─────────────────────────────────────────────────
+  function toggleGroup(id) {
+    const el = document.getElementById(id);
+    const idx = id.split('-')[1];
+    const ch  = document.getElementById('chevron-' + idx);
+    el.classList.toggle('hidden');
+    ch.style.transform = el.classList.contains('hidden') ? 'rotate(-90deg)' : '';
+  }
+
+  // ── Select / deselect helpers ───────────────────────────────────────────────
+  function selectAll(val) {
+    document.querySelectorAll('.file-checkbox').forEach(cb => cb.checked = val);
+    document.querySelectorAll('.cat-checkbox').forEach(cb => cb.checked = val);
+    updateCount();
+  }
+
+  function toggleCategory(cat, val) {
+    document.querySelectorAll(`.file-checkbox[data-cat="${cat}"]`).forEach(cb => cb.checked = val);
+    updateCount();
+  }
+
+  function updateCount() {
+    const checked = document.querySelectorAll('.file-checkbox:checked').length;
+    document.getElementById('selected-count').textContent = `${checked} seleccionado${checked !== 1 ? 's' : ''}`;
+    // Sync category checkboxes
+    document.querySelectorAll('.cat-checkbox').forEach(catCb => {
+      const cat = catCb.dataset.cat;
+      const all  = document.querySelectorAll(`.file-checkbox[data-cat="${cat}"]`);
+      const chk  = document.querySelectorAll(`.file-checkbox[data-cat="${cat}"]:checked`);
+      catCb.checked = chk.length === all.length;
+      catCb.indeterminate = chk.length > 0 && chk.length < all.length;
+    });
+  }
+
+  // ── Show confirm modal ──────────────────────────────────────────────────────
+  function showConfirmModal() {
+    const dest = document.getElementById('target-base').value.trim();
+    if (!dest) { showToast('Introduce la carpeta de destino primero', 'warning'); return; }
+    const checked = document.querySelectorAll('.file-checkbox:checked');
+    if (!checked.length) { showToast('Selecciona al menos un archivo', 'warning'); return; }
+    document.getElementById('modal-summary').textContent =
+      `Se moverán ${checked.length} archivo${checked.length !== 1 ? 's' : ''} a subcarpetas por categoría`;
+    document.getElementById('modal-dest').textContent = dest + '\\[Categoría]\\nombre_original';
+    document.getElementById('confirm-modal').classList.remove('hidden');
+  }
+
+  // ── Execute ─────────────────────────────────────────────────────────────────
+  function executeOrganize() {
+    document.getElementById('confirm-modal').classList.add('hidden');
+
+    const dest  = document.getElementById('target-base').value.trim();
+    const rutas = [...document.querySelectorAll('.file-checkbox:checked')].map(cb => cb.dataset.ruta);
+
+    // Show progress
+    const rc = document.getElementById('result-content');
+    rc.innerHTML = `<div class="text-center py-6">
+      <i class="fa-solid fa-spinner fa-spin text-4xl text-indigo-600 mb-3 block"></i>
+      <p class="text-gray-600 dark:text-gray-400 text-sm">Moviendo ${rutas.length} archivos…</p>
+    </div>`;
+    document.getElementById('result-modal').classList.remove('hidden');
+
+    fetch('/api/approve', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ approved_paths: rutas, target_base: dest }),
+    })
+    .then(r => r.json())
+    .then(d => {
+      const results = d.results || [];
+      const ok   = results.filter(r => r.success).length;
+      const fail = results.filter(r => !r.success).length;
+      rc.innerHTML = `
+        <div class="text-center mb-4">
+          <div class="w-14 h-14 ${fail===0?'bg-emerald-100 dark:bg-emerald-950':'bg-amber-100 dark:bg-amber-950'} rounded-2xl flex items-center justify-center mx-auto mb-3">
+            <i class="fa-solid ${fail===0?'fa-check text-emerald-600 dark:text-emerald-400':'fa-triangle-exclamation text-amber-600 dark:text-amber-400'} text-2xl"></i>
+          </div>
+          <h3 class="font-bold text-lg text-gray-900 dark:text-white mb-1">Organización completada</h3>
+          <p class="text-sm text-gray-500">${ok} movido${ok!==1?'s':''} correctamente${fail>0?' · '+fail+' error'+(fail!==1?'s':''):''}</p>
+        </div>
+        ${fail>0?`<div class="text-xs text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-950 rounded-lg p-3 max-h-32 overflow-y-auto">
+          ${results.filter(r=>!r.success).map(r=>`<div>✗ ${r.ruta?.split('\\').pop()||r.ruta}: ${r.error||'error'}</div>`).join('')}
+        </div>`:''}
+        <p class="text-xs text-gray-400 mt-3 text-center">
+          <i class="fa-solid fa-rotate-left mr-1"></i> Puedes deshacer desde Backup &amp; Undo
+        </p>`;
+    })
+    .catch(err => {
+      rc.innerHTML = `<div class="text-center py-4 text-red-600 dark:text-red-400">
+        <i class="fa-solid fa-circle-xmark text-3xl mb-2 block"></i>
+        <p class="text-sm">Error: ${err.message}</p>
+      </div>`;
+    });
+  }
+
+  // Inicializar contador
+  updateCount();
+</script>
+{% endblock %}
