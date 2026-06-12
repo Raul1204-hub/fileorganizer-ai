@@ -4,11 +4,15 @@ from collections import Counter, defaultdict
 from datetime import datetime
 from pathlib import Path
 
+from log import get_logger
+
 try:
     import magic
     _MAGIC_AVAILABLE = True
 except ImportError:
     _MAGIC_AVAILABLE = False
+
+logger = get_logger("fileorganizer.scanner")
 
 # Document extensions that always get hashed (BLAKE2b is the AI analysis cache key)
 DOC_EXTS = frozenset({".pdf", ".docx", ".doc", ".txt", ".odt", ".xlsx", ".csv"})
@@ -71,7 +75,8 @@ def compute_blake2b(path: Path) -> str:
             for chunk in iter(lambda: f.read(65536), b""):
                 h.update(chunk)
         return h.hexdigest()
-    except OSError:
+    except OSError as e:
+        logger.warning("hash | %s | %s", path, e)
         return ""
 
 
@@ -80,7 +85,8 @@ def _read_prefix(path: Path) -> bytes:
     try:
         with open(path, "rb") as f:
             return f.read(_PREFIX_BYTES)
-    except OSError:
+    except OSError as e:
+        logger.warning("read_prefix | %s | %s", path, e)
         return b""
 
 
@@ -178,7 +184,8 @@ def detect_magic(path: Path) -> str:
         return ""
     try:
         return magic.from_file(str(path), mime=True) or ""
-    except Exception:
+    except Exception as e:
+        logger.warning("detect_magic | %s | %s", path, e)
         return ""
 
 
@@ -241,7 +248,8 @@ def scan_directory(
             meta = get_file_metadata(path)
             meta["hash_blake2"] = compute_blake2b(path)
             files.append(meta)
-        except (PermissionError, OSError):
+        except (PermissionError, OSError) as e:
+            logger.warning("scan | %s | %s", path, e)
             continue
         if progress_callback:
             progress_callback(idx, total, path.name)
@@ -266,7 +274,8 @@ def scan_directory_fast(
         try:
             meta = get_file_metadata(path)
             files.append(meta)
-        except (PermissionError, OSError):
+        except (PermissionError, OSError) as e:
+            logger.warning("scan | %s | %s", path, e)
             continue
         if progress_callback:
             progress_callback(idx, total, path.name)

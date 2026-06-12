@@ -10,6 +10,10 @@ import ollama_client
 # Ensure project root is importable regardless of how this module is loaded
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+import log as _log
+_log.setup_logging()
+_wlog = _log.get_logger("fileorganizer.web")
+
 from flask import Flask, Response, jsonify, render_template, request, stream_with_context
 
 import chat as chat_module
@@ -43,6 +47,10 @@ class _ScanState:
         self.ema_anal_spc = 0.0
         self.ema_anal_n = 0
         self.avg_chars = 0.0        # running mean chars per doc
+        # Failure counters (accumulated during analysis phase)
+        self.analizados = 0
+        self.fallos_extraccion = 0
+        self.fallos_ollama = 0
 
 
 _ss = _ScanState()
@@ -62,6 +70,9 @@ def _snapshot() -> dict:
             "eta_segundos": round(_ss.eta_segundos, 1),
             "errores": list(_ss.errores),
             "summary": dict(_ss.summary),
+            "analizados": _ss.analizados,
+            "fallos_extraccion": _ss.fallos_extraccion,
+            "fallos_ollama": _ss.fallos_ollama,
             # Legacy fields kept for backwards compat
             "status": _ss.fase,
             "progress": _ss.hechos,
@@ -253,6 +264,9 @@ def _run_scan(target_path: str):
         _ss.ema_anal_spc = 0.0
         _ss.ema_anal_n = 0
         _ss.avg_chars = 0.0
+        _ss.analizados = 0
+        _ss.fallos_extraccion = 0
+        _ss.fallos_ollama = 0
 
     try:
         # ── Phase 1: fast stat-only disk scan ─────────────────────────────────
@@ -381,6 +395,13 @@ def _run_scan(target_path: str):
             _ss.eta_segundos = -1.0
             _ss.t_inicio_fase = time.monotonic()
 
+        def _on_failure(reason: str) -> None:
+            with _lock:
+                if reason == "extraction":
+                    _ss.fallos_extraccion += 1
+                elif reason == "ollama":
+                    _ss.fallos_ollama += 1
+
         for ruta, aid in to_analyze.items():
             if _ss.cancelled:
                 break
@@ -388,12 +409,16 @@ def _run_scan(target_path: str):
                 _ss.archivo_actual = Path(ruta).name
 
             t0 = time.monotonic()
-            result = analyzer.analyze_file(Path(ruta), Path(ruta).suffix.lower())
+            result = analyzer.analyze_file(
+                Path(ruta), Path(ruta).suffix.lower(), on_failure=_on_failure
+            )
             elapsed = time.monotonic() - t0
             text_len = result.pop("_text_len", 0) if result else 0
 
             with _lock:
                 _ss.hechos += 1
+                if result:
+                    _ss.analizados += 1
                 if text_len > 0:
                     n = _ss.ema_anal_n
                     spc = elapsed / text_len
@@ -430,6 +455,7 @@ def _run_scan(target_path: str):
             _ss.fase = "completado"
             _ss.eta_segundos = 0.0
             savings_pct = round(100 * (1 - n_hashed / max(n_candidates, 1)))
+            total_fallos = _ss.fallos_extraccion + _ss.fallos_ollama
             _ss.summary = {
                 "unchanged": len(unchanged),
                 "new": len(new_files),
@@ -440,7 +466,16 @@ def _run_scan(target_path: str):
                 "hashed": n_hashed,
                 "candidates": n_candidates,
                 "savings_pct": savings_pct,
+                "analizados": _ss.analizados,
+                "fallos_extraccion": _ss.fallos_extraccion,
+                "fallos_ollama": _ss.fallos_ollama,
             }
+            _wlog.info(
+                "Scan complete — analizados=%d, fallidos=%d (extracción=%d, Ollama=%d)"
+                " — detalle en logs/fileorganizer.log",
+                _ss.analizados, total_fallos,
+                _ss.fallos_extraccion, _ss.fallos_ollama,
+            )
 
     except Exception as exc:
         err = f"{type(exc).__name__}: {exc}"

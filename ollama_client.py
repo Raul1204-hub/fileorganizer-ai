@@ -7,40 +7,64 @@ Single source of truth for all Ollama communication:
 """
 
 import re
+import time
 
 import requests
 
 from config import OLLAMA_BASE, OLLAMA_TIMEOUT, ANALYSIS_MODEL, SQL_MODEL, RESPONSE_MODEL
+from log import get_logger
+
+logger = get_logger("fileorganizer.ollama")
 
 # All models the application uses, in priority order (de-duplicated)
 REQUIRED_MODELS: list[str] = list(dict.fromkeys([SQL_MODEL, RESPONSE_MODEL, ANALYSIS_MODEL]))
 
 
-def call_ollama(model: str, prompt: str, timeout: int | None = None) -> str:
+def call_ollama(
+    model: str,
+    prompt: str,
+    timeout: int | None = None,
+    fmt: str | dict | None = None,
+) -> str:
     """POST to /generate and return the model response.
 
-    - Strips <think>…</think> blocks emitted by some qwen3 models.
-    - Returns '' on soft errors (bad JSON, HTTP 5xx, etc.).
-    - Raises RuntimeError("ollama_not_running") if the server is unreachable.
-    - Raises RuntimeError("model_not_found") if the model isn't installed.
+    Parameters
+    ----------
+    fmt : str | dict | None
+        Passed as ``"format"`` in the Ollama payload.
+        Use ``"json"`` to force valid JSON output, or a JSON Schema dict to
+        constrain the output structure (Ollama ≥ Dec-2024).
+        When None (default) the response is treated as plain text and
+        <think>…</think> blocks are stripped (qwen3 models in chat mode).
+
+    Raises RuntimeError("ollama_not_running") if the server is unreachable.
+    Raises RuntimeError("model_not_found") if the model isn't installed.
+    Returns '' on all other soft errors.
     """
     if timeout is None:
         timeout = OLLAMA_TIMEOUT
+    payload: dict = {"model": model, "prompt": prompt, "stream": False}
+    if fmt is not None:
+        payload["format"] = fmt
+    t0 = time.monotonic()
     try:
-        resp = requests.post(
-            f"{OLLAMA_BASE}/generate",
-            json={"model": model, "prompt": prompt, "stream": False},
-            timeout=timeout,
-        )
+        resp = requests.post(f"{OLLAMA_BASE}/generate", json=payload, timeout=timeout)
         resp.raise_for_status()
+        elapsed = time.monotonic() - t0
         raw = resp.json().get("response", "").strip()
-        return re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
+        if fmt is None:
+            # Strip reasoning blocks emitted by some qwen3 models (text mode only;
+            # format=json prevents them and stripping would corrupt the JSON).
+            raw = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
+        logger.debug("ollama_call | model=%s | %.2fs | resp=%s", model, elapsed, raw[:200])
+        return raw
     except requests.exceptions.ConnectionError:
         raise RuntimeError("ollama_not_running")
     except Exception as exc:
         msg = str(exc).lower()
         if "model" in msg and ("not found" in msg or "pull" in msg):
             raise RuntimeError("model_not_found")
+        logger.warning("ollama_call | model=%s | %.2fs | %s", model, time.monotonic() - t0, exc)
         return ""
 
 

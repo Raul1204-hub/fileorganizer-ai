@@ -11,10 +11,12 @@ import sys
 from pathlib import Path
 
 import database
+import log as _log
 
 
 def cli_scan(target_path: str) -> None:
     """Incremental scan: only processes new/modified files, preserves history."""
+    _log.setup_logging()
     import scanner
     import analyzer
     import recommendations
@@ -157,10 +159,21 @@ def cli_scan(target_path: str) -> None:
             print(f"[!] Model not installed — skipping analysis. Run:\n{cmds}")
             to_analyze.clear()
 
+    fail_ext = [0]
+    fail_ollama = [0]
+    n_analyzed = [0]
+
+    def _on_fail(reason: str) -> None:
+        if reason == "extraction":
+            fail_ext[0] += 1
+        elif reason == "ollama":
+            fail_ollama[0] += 1
+
     for i, (ruta, aid) in enumerate(to_analyze.items(), 1):
         print(f"\r  [{i}/{len(to_analyze)}] {Path(ruta).name[:60]}", end="", flush=True)
-        result = analyzer.analyze_file(Path(ruta), Path(ruta).suffix.lower())
+        result = analyzer.analyze_file(Path(ruta), Path(ruta).suffix.lower(), on_failure=_on_fail)
         if result:
+            n_analyzed[0] += 1
             cat_id = scanner.CATEGORIA_IDS.get(result.get("categoria", ""), None)
             database.update_archivo_resumen(aid, result.get("resumen", ""), cat_id)
             for tag in result.get("etiquetas", []):
@@ -169,7 +182,10 @@ def cli_scan(target_path: str) -> None:
 
     if to_analyze:
         print()
-    print("[+] Analysis complete")
+    total_fallos = fail_ext[0] + fail_ollama[0]
+    fail_detail = f" ({fail_ext[0]} extracción, {fail_ollama[0]} Ollama)" if total_fallos else ""
+    print(f"[+] Analizados {n_analyzed[0]}, fallidos {total_fallos}{fail_detail}"
+          + (f" — detalle en logs/fileorganizer.log" if total_fallos else ""))
 
     # ── Recommendations ───────────────────────────────────────────────────────
     print("[+] Running recommendation rules…")

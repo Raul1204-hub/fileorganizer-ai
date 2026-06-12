@@ -225,7 +225,12 @@
       ind.classList.add('hidden'); ind.classList.remove('flex');
       if (s.fase === 'completado' && _prevFase !== 'completado' && _prevFase !== 'idle') {
         const sum = s.summary || {};
-        showToast(`Escaneo completado — ${sum.new || 0} nuevos, ${sum.modified || 0} modificados`, 'success');
+        const failed = (sum.fallos_extraccion || 0) + (sum.fallos_ollama || 0);
+        let toastMsg = `Escaneo completado — ${sum.new || 0} nuevos, ${sum.modified || 0} modificados`;
+        if (failed > 0) {
+          toastMsg += ` · ${failed} fallos (${sum.fallos_extraccion || 0} extracción, ${sum.fallos_ollama || 0} Ollama)`;
+        }
+        showToast(toastMsg, failed > 0 ? 'warning' : 'success');
         setTimeout(() => location.reload(), 1500);
         panel.classList.add('hidden');
       } else if (s.fase === 'error') {
