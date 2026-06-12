@@ -224,6 +224,19 @@ def api_scan_status():
     return jsonify(_scan_state)
 
 
+@app.route("/api/browse-folder")
+def api_browse_folder():
+    """Open the native Windows folder picker and return the selected path."""
+    import tkinter as tk
+    from tkinter import filedialog
+    root = tk.Tk()
+    root.withdraw()
+    root.wm_attributes("-topmost", 1)
+    folder = filedialog.askdirectory(parent=root, title="Seleccionar carpeta para escanear")
+    root.destroy()
+    return jsonify({"path": folder})
+
+
 # ── Approve / move API ────────────────────────────────────────────────────────
 
 @app.route("/api/approve", methods=["POST"])
