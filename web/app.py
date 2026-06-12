@@ -65,6 +65,42 @@ def index():
     )
 
 
+@app.route("/explorar")
+def explorar():
+    search     = request.args.get("search", "").strip() or None
+    raw_cat    = request.args.get("categoria_id", "")
+    categoria_id = int(raw_cat) if raw_cat.isdigit() else None
+    sort       = request.args.get("sort", "fecha")   # fecha | nombre | tamaño
+    page       = max(1, int(request.args.get("page", 1)))
+    per_page   = 50
+    offset     = (page - 1) * per_page
+
+    all_files  = database.get_all_archivos(search=search, categoria_id=categoria_id)
+
+    # Sort in Python (avoids changing DB layer)
+    sort_keys  = {"nombre": lambda f: (f["nombre"] or "").lower(),
+                  "tamaño": lambda f: f["tamaño_bytes"] or 0,
+                  "fecha":  lambda f: f["fecha_modificacion"] or ""}
+    all_files.sort(key=sort_keys.get(sort, sort_keys["fecha"]), reverse=(sort != "nombre"))
+
+    total      = len(all_files)
+    pages      = max(1, (total + per_page - 1) // per_page)
+    archivos   = all_files[offset : offset + per_page]
+    categorias = database.get_categorias()
+
+    return render_template(
+        "explorar.html",
+        archivos=archivos,
+        categorias=categorias,
+        total=total,
+        page=page,
+        pages=pages,
+        search=search or "",
+        categoria_id=categoria_id,
+        sort=sort,
+    )
+
+
 @app.route("/archivo/<int:archivo_id>")
 def archivo_detail(archivo_id):
     archivo = database.get_archivo(archivo_id)

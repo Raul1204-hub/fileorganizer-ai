@@ -62,7 +62,7 @@
       <a href="/" class="nav-link {% if request.path == '/' %}active{% endif %}">
         <i class="fa-solid fa-house w-4 text-center text-indigo-500"></i> Dashboard
       </a>
-      <a href="/?view=all" class="nav-link">
+      <a href="/explorar" class="nav-link {% if '/explorar' in request.path %}active{% endif %}">
         <i class="fa-solid fa-folder-tree w-4 text-center text-emerald-500"></i> Explorar archivos
       </a>
       <a href="/chat" class="nav-link {% if request.path == '/chat' %}active{% endif %}">
