@@ -128,8 +128,11 @@ def analyze_with_ollama(text: str, filename: str) -> dict:
 # ── public API ────────────────────────────────────────────────────────────────
 
 def analyze_file(path: Path, extension: str) -> dict:
-    """Extract text and analyze. Returns dict with categoria, etiquetas, resumen."""
+    """Extract text and analyze. Returns dict with categoria, etiquetas, resumen, _text_len."""
     text = extract_text(path, extension)
     if not text.strip():
         return {}
-    return analyze_with_ollama(text, path.name)
+    result = analyze_with_ollama(text, path.name)
+    if result:
+        result["_text_len"] = len(text)
+    return result

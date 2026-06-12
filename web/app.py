@@ -1,12 +1,16 @@
+import json
 import sys
 import threading
+import time
 import webbrowser
 from pathlib import Path
+
+import requests
 
 # Ensure project root is importable regardless of how this module is loaded
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, Response, jsonify, render_template, request, stream_with_context
 
 import chat as chat_module
 import database
@@ -20,15 +24,53 @@ app.secret_key = "fileorganizer-ai-secret-2024"
 
 # ── Global scan state ─────────────────────────────────────────────────────────
 
-_scan_state: dict = {
-    "running": False,
-    "status": "idle",   # idle | scanning | indexing | analyzing | recommending | done | error
-    "progress": 0,
-    "total": 0,
-    "current_file": "",
-    "error": None,
-    "summary": None,    # set after each completed scan
-}
+_EMA_ALPHA = 0.2
+
+
+class _ScanState:
+    def __init__(self):
+        self.running = False
+        self.cancelled = False
+        self.fase = "idle"          # idle|escaneando|analizando|recomendaciones|completado|error
+        self.hechos = 0
+        self.total = 0
+        self.archivo_actual = ""
+        self.t_inicio_fase = 0.0
+        self.eta_segundos = -1.0    # -1 = calculando
+        self.errores: list[str] = []
+        self.summary: dict = {}
+        # EMA — scan phase (seconds per file for MD5)
+        self.ema_scan = 0.0
+        self.ema_scan_n = 0
+        # EMA — analysis phase (seconds per character)
+        self.ema_anal_spc = 0.0
+        self.ema_anal_n = 0
+        self.avg_chars = 0.0        # running mean chars per doc
+
+
+_ss = _ScanState()
+_lock = threading.Lock()
+
+
+def _snapshot() -> dict:
+    """Thread-safe read of the full scan state."""
+    with _lock:
+        return {
+            "running": _ss.running,
+            "cancelled": _ss.cancelled,
+            "fase": _ss.fase,
+            "hechos": _ss.hechos,
+            "total": _ss.total,
+            "archivo_actual": _ss.archivo_actual,
+            "eta_segundos": round(_ss.eta_segundos, 1),
+            "errores": list(_ss.errores),
+            "summary": dict(_ss.summary),
+            # Legacy fields kept for backwards compat
+            "status": _ss.fase,
+            "progress": _ss.hechos,
+            "current_file": _ss.archivo_actual,
+            "error": _ss.errores[-1] if _ss.errores else None,
+        }
 
 
 # ── Template helpers ──────────────────────────────────────────────────────────
@@ -62,7 +104,7 @@ def index():
         recs=recs,
         archivos=archivos,
         categorias=categorias,
-        scan_state=_scan_state,
+        scan_state=_snapshot(),
     )
 
 
@@ -199,30 +241,37 @@ def chat_query():
 # ── Scan API ──────────────────────────────────────────────────────────────────
 
 def _run_scan(target_path: str):
-    _scan_state.update({
-        "running": True,
-        "status": "scanning",
-        "error": None,
-        "progress": 0,
-        "total": 0,
-        "current_file": "",
-        "summary": None,
-    })
+    # ── Reset state ───────────────────────────────────────────────────────────
+    with _lock:
+        _ss.running = True
+        _ss.cancelled = False
+        _ss.fase = "escaneando"
+        _ss.hechos = 0
+        _ss.total = 0
+        _ss.archivo_actual = ""
+        _ss.t_inicio_fase = time.monotonic()
+        _ss.eta_segundos = -1.0
+        _ss.errores.clear()
+        _ss.summary.clear()
+        _ss.ema_scan = 0.0
+        _ss.ema_scan_n = 0
+        _ss.ema_anal_spc = 0.0
+        _ss.ema_anal_n = 0
+        _ss.avg_chars = 0.0
 
     try:
-        # ── Phase 1: fast disk scan (stat only, no MD5) ───────────────────────
-        def _progress(done, total, filename):
-            _scan_state["progress"] = done
-            _scan_state["total"] = total
-            _scan_state["current_file"] = filename
+        # ── Phase 1: fast stat-only disk scan ─────────────────────────────────
+        def _cb_fast(done, total, filename):
+            with _lock:
+                _ss.hechos = done
+                _ss.total = total
+                _ss.archivo_actual = filename
 
-        disk_files = scanner.scan_directory_fast(target_path, progress_callback=_progress)
+        disk_files = scanner.scan_directory_fast(target_path, progress_callback=_cb_fast)
         disk_paths = {f["ruta_actual"] for f in disk_files}
 
-        # ── Phase 2: reconcile ────────────────────────────────────────────────
-        _scan_state.update({"status": "indexing", "progress": 0, "total": len(disk_files)})
+        # ── Reconcile disk vs DB ──────────────────────────────────────────────
         db_index = database.get_all_archivos_indexed()
-
         unchanged: list[dict] = []
         new_files: list[dict] = []
         modified: list[dict] = []
@@ -245,27 +294,41 @@ def _run_scan(target_path: str):
             if ruta not in disk_paths:
                 disappeared_ids.append(db_row["id"])
 
-        # Mark disappeared
         for aid in disappeared_ids:
             database.mark_archivo_desaparecido(aid)
 
-        # Insert new files
+        # ── MD5 + DB phase (new & modified files) ─────────────────────────────
+        n_hash = len(new_files) + len(modified)
+        with _lock:
+            _ss.hechos = 0
+            _ss.total = n_hash
+            _ss.archivo_actual = ""
+            _ss.eta_segundos = -1.0 if n_hash > 0 else 0.0
+
         cache_hits = 0
         to_analyze: dict[str, int] = {}
 
-        _scan_state["total"] = len(new_files)
-        for i, f in enumerate(new_files, 1):
-            _scan_state["progress"] = i
-            _scan_state["current_file"] = f["nombre"]
+        for f in new_files:
+            if _ss.cancelled:
+                break
+            t0 = time.monotonic()
             f["hash_md5"] = scanner.compute_md5(Path(f["ruta_actual"]))
+            elapsed = time.monotonic() - t0
+
+            with _lock:
+                _ss.hechos += 1
+                _ss.archivo_actual = f["nombre"]
+                n = _ss.ema_scan_n
+                _ss.ema_scan = (_EMA_ALPHA * elapsed + (1 - _EMA_ALPHA) * _ss.ema_scan
+                                if n else elapsed)
+                _ss.ema_scan_n = n + 1
+                _ss.eta_segundos = _ss.ema_scan * max(_ss.total - _ss.hechos, 0)
+
             aid = database.insert_archivo(
-                nombre=f["nombre"],
-                extension=f["extension"],
-                ruta_actual=f["ruta_actual"],
-                tamaño_bytes=f["tamaño_bytes"],
+                nombre=f["nombre"], extension=f["extension"],
+                ruta_actual=f["ruta_actual"], tamaño_bytes=f["tamaño_bytes"],
                 fecha_modificacion=f["fecha_modificacion"],
-                hash_md5=f["hash_md5"],
-                categoria_id=f["categoria_id"],
+                hash_md5=f["hash_md5"], categoria_id=f["categoria_id"],
             )
             database.insert_historial(aid, None, f["ruta_actual"], "indexar")
             cached = database.get_resumen_by_hash(f["hash_md5"])
@@ -276,19 +339,27 @@ def _run_scan(target_path: str):
             else:
                 to_analyze[f["ruta_actual"]] = aid
 
-        # Update modified files
         for f in modified:
-            _scan_state["current_file"] = f["nombre"]
+            if _ss.cancelled:
+                break
+            t0 = time.monotonic()
             f["hash_md5"] = scanner.compute_md5(Path(f["ruta_actual"]))
+            elapsed = time.monotonic() - t0
+
+            with _lock:
+                _ss.hechos += 1
+                _ss.archivo_actual = f["nombre"]
+                n = _ss.ema_scan_n
+                _ss.ema_scan = (_EMA_ALPHA * elapsed + (1 - _EMA_ALPHA) * _ss.ema_scan
+                                if n else elapsed)
+                _ss.ema_scan_n = n + 1
+                _ss.eta_segundos = _ss.ema_scan * max(_ss.total - _ss.hechos, 0)
+
             database.update_archivo_full(
-                archivo_id=f["db_id"],
-                nombre=f["nombre"],
-                extension=f["extension"],
-                ruta_actual=f["ruta_actual"],
-                tamaño_bytes=f["tamaño_bytes"],
+                archivo_id=f["db_id"], nombre=f["nombre"], extension=f["extension"],
+                ruta_actual=f["ruta_actual"], tamaño_bytes=f["tamaño_bytes"],
                 fecha_modificacion=f["fecha_modificacion"],
-                hash_md5=f["hash_md5"],
-                categoria_id=f["categoria_id"],
+                hash_md5=f["hash_md5"], categoria_id=f["categoria_id"],
             )
             database.insert_historial(f["db_id"], f["ruta_actual"], f["ruta_actual"], "actualizar")
             database.clear_etiquetas_archivo(f["db_id"])
@@ -301,19 +372,47 @@ def _run_scan(target_path: str):
             else:
                 to_analyze[f["ruta_actual"]] = f["db_id"]
 
-        # ── Phase 3: Ollama analysis for new/modified docs without cached resumen
-        _scan_state["status"] = "analyzing"
+        # ── Analysis phase (Ollama, weighted EMA) ─────────────────────────────
         doc_exts = {".pdf", ".docx", ".doc", ".txt", ".odt", ".xlsx", ".csv"}
         docs_to_analyze = {
             ruta: aid for ruta, aid in to_analyze.items()
             if Path(ruta).suffix.lower() in doc_exts
         }
-        _scan_state["total"] = len(docs_to_analyze)
 
-        for i, (ruta, aid) in enumerate(docs_to_analyze.items(), 1):
-            _scan_state["progress"] = i
-            _scan_state["current_file"] = Path(ruta).name
+        with _lock:
+            _ss.fase = "analizando"
+            _ss.hechos = 0
+            _ss.total = len(docs_to_analyze)
+            _ss.archivo_actual = ""
+            _ss.eta_segundos = -1.0
+            _ss.t_inicio_fase = time.monotonic()
+
+        for ruta, aid in docs_to_analyze.items():
+            if _ss.cancelled:
+                break
+            with _lock:
+                _ss.archivo_actual = Path(ruta).name
+
+            t0 = time.monotonic()
             result = analyzer.analyze_file(Path(ruta), Path(ruta).suffix.lower())
+            elapsed = time.monotonic() - t0
+            text_len = result.pop("_text_len", 0) if result else 0
+
+            with _lock:
+                _ss.hechos += 1
+                if text_len > 0:
+                    n = _ss.ema_anal_n
+                    spc = elapsed / text_len
+                    _ss.ema_anal_spc = (_EMA_ALPHA * spc + (1 - _EMA_ALPHA) * _ss.ema_anal_spc
+                                       if n else spc)
+                    _ss.avg_chars = (_ss.avg_chars * n + text_len) / (n + 1)
+                    _ss.ema_anal_n = n + 1
+                remaining = _ss.total - _ss.hechos
+                if _ss.ema_anal_n > 0 and remaining > 0:
+                    _ss.eta_segundos = _ss.ema_anal_spc * _ss.avg_chars * remaining
+                elif remaining == 0:
+                    _ss.eta_segundos = 0.0
+
             if result:
                 cat_id = scanner.CATEGORIA_IDS.get(result.get("categoria", ""), None)
                 database.update_archivo_resumen(aid, result.get("resumen", ""), cat_id)
@@ -321,25 +420,39 @@ def _run_scan(target_path: str):
                     if tag:
                         database.insert_etiqueta(aid, str(tag))
 
-        # ── Phase 4: recommendations ──────────────────────────────────────────
-        _scan_state["status"] = "recommending"
-        database.clear_recomendaciones()
-        recommendations.run_all_rules()
+        # ── Recommendations phase ─────────────────────────────────────────────
+        if not _ss.cancelled:
+            with _lock:
+                _ss.fase = "recomendaciones"
+                _ss.hechos = 0
+                _ss.total = 0
+                _ss.archivo_actual = ""
+                _ss.eta_segundos = -1.0
+            database.clear_recomendaciones()
+            recommendations.run_all_rules()
 
-        _scan_state["summary"] = {
-            "unchanged": len(unchanged),
-            "new": len(new_files),
-            "modified": len(modified),
-            "disappeared": len(disappeared_ids),
-            "cache_hits": cache_hits,
-        }
-        _scan_state["status"] = "done"
+        # ── Complete ──────────────────────────────────────────────────────────
+        with _lock:
+            _ss.fase = "completado"
+            _ss.eta_segundos = 0.0
+            _ss.summary = {
+                "unchanged": len(unchanged),
+                "new": len(new_files),
+                "modified": len(modified),
+                "disappeared": len(disappeared_ids),
+                "cache_hits": cache_hits,
+                "cancelled": _ss.cancelled,
+            }
 
     except Exception as exc:
-        _scan_state["error"] = str(exc)
-        _scan_state["status"] = "error"
+        err = f"{type(exc).__name__}: {exc}"
+        with _lock:
+            _ss.errores.append(err)
+            _ss.fase = "error"
+
     finally:
-        _scan_state["running"] = False
+        with _lock:
+            _ss.running = False
 
 
 @app.route("/api/scan", methods=["POST"])
@@ -350,7 +463,7 @@ def api_scan():
         return jsonify({"error": "Ruta no proporcionada"}), 400
     if not Path(target_path).exists():
         return jsonify({"error": f"La ruta no existe: {target_path}"}), 400
-    if _scan_state["running"]:
+    if _ss.running:
         return jsonify({"error": "Ya hay un escaneo en curso"}), 409
 
     thread = threading.Thread(target=_run_scan, args=(target_path,), daemon=True)
@@ -360,7 +473,37 @@ def api_scan():
 
 @app.route("/api/scan/status")
 def api_scan_status():
-    return jsonify(_scan_state)
+    return jsonify(_snapshot())
+
+
+@app.route("/api/scan/progress")
+def api_scan_progress():
+    """SSE stream: emits a JSON event every second while scan is running."""
+    def _generate():
+        while True:
+            snap = _snapshot()
+            yield f"data: {json.dumps(snap)}\n\n"
+            if not snap["running"] and snap["fase"] in ("completado", "error", "idle"):
+                break
+            time.sleep(1)
+
+    return Response(
+        stream_with_context(_generate()),
+        mimetype="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@app.route("/api/scan/cancel", methods=["POST"])
+def api_scan_cancel():
+    with _lock:
+        if not _ss.running:
+            return jsonify({"error": "No hay escaneo en curso"}), 409
+        _ss.cancelled = True
+    return jsonify({"message": "Cancelación solicitada"})
 
 
 @app.route("/api/browse-folder")

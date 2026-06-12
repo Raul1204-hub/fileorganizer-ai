@@ -259,6 +259,7 @@
       if (d.error) { errEl.textContent = d.error; errEl.classList.remove('hidden'); return; }
       document.getElementById('scan-modal').classList.add('hidden');
       showToast('Escaneo iniciado…', 'info');
+      if (typeof notifyScanStarted === 'function') notifyScanStarted();
     })
     .catch(() => { errEl.textContent = 'Error de conexión.'; errEl.classList.remove('hidden'); });
   }

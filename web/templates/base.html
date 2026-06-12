@@ -107,7 +107,7 @@
 
       <div class="flex items-center gap-2">
         <!-- Scan indicator -->
-        <div id="scan-indicator" class="hidden items-center gap-2 px-3 py-1.5 bg-indigo-50 dark:bg-indigo-950 rounded-full text-xs font-medium text-indigo-700 dark:text-indigo-300">
+        <div id="scan-indicator" class="hidden items-center gap-2 px-3 py-1.5 bg-indigo-50 dark:bg-indigo-950 rounded-full text-xs font-medium text-indigo-700 dark:text-indigo-300 cursor-pointer" onclick="document.getElementById('scan-panel').classList.toggle('hidden')">
           <i class="fa-solid fa-spinner fa-spin"></i>
           <span id="scan-indicator-text">Escaneando…</span>
         </div>
@@ -130,6 +130,30 @@
 
 <!-- ── Toast container ──────────────────────────────────────────────────────── -->
 <div id="toast-container" class="fixed bottom-5 right-5 z-50 flex flex-col gap-2 pointer-events-none"></div>
+
+<!-- ── Scan progress panel ───────────────────────────────────────────────────── -->
+<div id="scan-panel" class="hidden fixed bottom-0 left-60 right-0 z-40 bg-white dark:bg-gray-900 border-t border-gray-200 dark:border-gray-800 shadow-lg px-6 py-3">
+  <div class="max-w-4xl flex flex-col gap-1.5">
+    <div class="flex items-center justify-between">
+      <div class="flex items-center gap-2 text-sm font-medium text-gray-900 dark:text-white">
+        <i class="fa-solid fa-spinner fa-spin text-indigo-500"></i>
+        <span id="sp-fase">Escaneando…</span>
+        <span id="sp-fraction" class="text-gray-400 text-xs font-normal"></span>
+      </div>
+      <div class="flex items-center gap-3">
+        <span id="sp-eta" class="text-xs text-gray-400"></span>
+        <button onclick="cancelScan()" id="sp-cancel-btn"
+                class="text-xs px-2.5 py-1 rounded-md bg-red-50 dark:bg-red-950 text-red-600 dark:text-red-400 hover:bg-red-100 dark:hover:bg-red-900 transition">
+          <i class="fa-solid fa-stop mr-1"></i>Cancelar
+        </button>
+      </div>
+    </div>
+    <div class="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-1.5 overflow-hidden">
+      <div id="sp-bar" class="h-full bg-indigo-500 rounded-full transition-all duration-500" style="width:0%"></div>
+    </div>
+    <div id="sp-file" class="text-xs text-gray-400 truncate"></div>
+  </div>
+</div>
 
 <script>
   // ── Dark mode ──────────────────────────────────────────────────────────────
@@ -154,40 +178,108 @@
     setTimeout(() => el.remove(), 4000);
   }
 
-  // ── Scan status polling ────────────────────────────────────────────────────
-  const STATUS_LABELS = {
-    scanning: 'Escaneando archivos',
-    indexing: 'Indexando en BD',
-    analyzing: 'Analizando con IA',
-    recommending: 'Generando recomendaciones',
+  // ── Scan progress ──────────────────────────────────────────────────────────
+  const FASE_LABELS = {
+    escaneando:      'Escaneando archivos',
+    analizando:      'Analizando con IA',
+    recomendaciones: 'Generando recomendaciones',
+    completado:      'Escaneo completado',
+    error:           'Error en el escaneo',
+    idle:            'En espera',
   };
-  let _lastStatus = 'idle';
 
-  function pollScan() {
-    fetch('/api/scan/status')
+  let _prevFase = 'idle';
+  let _sseSource = null;
+
+  function _applyState(s) {
+    const ind    = document.getElementById('scan-indicator');
+    const indTxt = document.getElementById('scan-indicator-text');
+    const panel  = document.getElementById('scan-panel');
+    const spFase = document.getElementById('sp-fase');
+    const spFrac = document.getElementById('sp-fraction');
+    const spEta  = document.getElementById('sp-eta');
+    const spBar  = document.getElementById('sp-bar');
+    const spFile = document.getElementById('sp-file');
+
+    if (s.running) {
+      ind.classList.remove('hidden'); ind.classList.add('flex');
+      panel.classList.remove('hidden');
+
+      const label = FASE_LABELS[s.fase] || s.fase;
+      indTxt.textContent = label;
+      spFase.textContent = label;
+
+      const pct = s.total > 0 ? Math.round((s.hechos / s.total) * 100) : 0;
+      spBar.style.width = (s.total > 0 ? pct : 0) + '%';
+      spFrac.textContent = s.total > 0 ? `(${s.hechos}/${s.total})` : '';
+      spFile.textContent = s.archivo_actual || '';
+
+      if (s.eta_segundos >= 0) {
+        const min = Math.floor(s.eta_segundos / 60);
+        const sec = Math.round(s.eta_segundos % 60);
+        spEta.textContent = min > 0 ? `~${min}m ${sec}s restantes` : `~${sec}s restantes`;
+      } else {
+        spEta.textContent = 'calculando ETA…';
+      }
+    } else {
+      ind.classList.add('hidden'); ind.classList.remove('flex');
+      if (s.fase === 'completado' && _prevFase !== 'completado' && _prevFase !== 'idle') {
+        const sum = s.summary || {};
+        showToast(`Escaneo completado — ${sum.new || 0} nuevos, ${sum.modified || 0} modificados`, 'success');
+        setTimeout(() => location.reload(), 1500);
+        panel.classList.add('hidden');
+      } else if (s.fase === 'error') {
+        showToast('Error durante el escaneo: ' + (s.error || ''), 'error');
+        panel.classList.add('hidden');
+      } else if (s.fase !== 'idle') {
+        panel.classList.add('hidden');
+      }
+    }
+    _prevFase = s.fase;
+  }
+
+  function notifyScanStarted() {
+    _applyState({ running: true, fase: 'escaneando', hechos: 0, total: 0,
+                  archivo_actual: '', eta_segundos: -1, summary: {} });
+    _startSSE();
+  }
+
+  function _startSSE() {
+    if (_sseSource) { _sseSource.close(); _sseSource = null; }
+    try {
+      _sseSource = new EventSource('/api/scan/progress');
+      _sseSource.onmessage = e => {
+        const s = JSON.parse(e.data);
+        _applyState(s);
+        if (!s.running) { _sseSource.close(); _sseSource = null; }
+      };
+      _sseSource.onerror = () => {
+        _sseSource.close(); _sseSource = null;
+        _fallbackPoll();
+      };
+    } catch (err) {
+      _fallbackPoll();
+    }
+  }
+
+  function _fallbackPoll() {
+    fetch('/api/scan/status').then(r => r.json()).then(s => {
+      _applyState(s);
+      if (s.running) setTimeout(_fallbackPoll, 2000);
+    }).catch(() => setTimeout(_fallbackPoll, 3000));
+  }
+
+  function cancelScan() {
+    fetch('/api/scan/cancel', { method: 'POST' })
       .then(r => r.json())
-      .then(s => {
-        const ind = document.getElementById('scan-indicator');
-        const txt = document.getElementById('scan-indicator-text');
-        if (s.running) {
-          ind.classList.remove('hidden');
-          ind.classList.add('flex');
-          const label = STATUS_LABELS[s.status] || s.status;
-          const pct = s.total > 0 ? ` (${s.progress}/${s.total})` : '';
-          txt.textContent = `${label}${pct}`;
-        } else {
-          ind.classList.add('hidden');
-          ind.classList.remove('flex');
-          if (_lastStatus === 'analyzing' || _lastStatus === 'recommending') {
-            showToast('¡Escaneo completado!', 'success');
-            setTimeout(() => location.reload(), 1200);
-          }
-        }
-        _lastStatus = s.status;
-      })
+      .then(() => showToast('Cancelando escaneo…', 'warning'))
       .catch(() => {});
   }
-  setInterval(pollScan, 2500);
+
+  // On page load: check if a scan is already in progress and attach to it
+  fetch('/api/scan/status').then(r => r.json()).then(s => {
+    if (s.running) { _applyState(s); _startSSE(); }
+  }).catch(() => {});
 </script>
 
 {% block scripts %}{% endblock %}
