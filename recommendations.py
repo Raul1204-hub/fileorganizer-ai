@@ -28,10 +28,10 @@ def r1_duplicates():
     conn = database.get_connection()
     cur = conn.cursor()
     cur.execute(
-        """SELECT hash_md5, COUNT(*) AS cnt, GROUP_CONCAT(id) AS ids
+        """SELECT hash_blake2, COUNT(*) AS cnt, GROUP_CONCAT(id) AS ids
            FROM archivos
-           WHERE hash_md5 != '' AND hash_md5 IS NOT NULL
-           GROUP BY hash_md5
+           WHERE hash_blake2 != '' AND hash_blake2 IS NOT NULL
+           GROUP BY hash_blake2
            HAVING cnt > 1"""
     )
     rows = cur.fetchall()

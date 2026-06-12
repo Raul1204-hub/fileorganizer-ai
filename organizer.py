@@ -10,7 +10,7 @@ def propose_organization(files: list[dict]) -> list[dict]:
     seen_hashes: dict[str, str] = {}
 
     for f in files:
-        h = f.get("hash_md5", "")
+        h = f.get("hash_blake2", "")
         is_dup = False
         dup_of = None
         if h:
@@ -25,7 +25,7 @@ def propose_organization(files: list[dict]) -> list[dict]:
             "ruta_actual":     f["ruta_actual"],
             "categoria_nombre":f["categoria_nombre"],
             "tamaño_bytes":    f.get("tamaño_bytes", 0),
-            "hash_md5":        h,
+            "hash_blake2":     h,
             "is_duplicate":    is_dup,
             "duplicate_of":    dup_of,
         })

@@ -39,10 +39,7 @@ class _ScanState:
         self.eta_segundos = -1.0    # -1 = calculando
         self.errores: list[str] = []
         self.summary: dict = {}
-        # EMA — scan phase (seconds per file for MD5)
-        self.ema_scan = 0.0
-        self.ema_scan_n = 0
-        # EMA — analysis phase (seconds per character)
+        # EMA — analysis phase (seconds per character, for Ollama ETA)
         self.ema_anal_spc = 0.0
         self.ema_anal_n = 0
         self.avg_chars = 0.0        # running mean chars per doc
@@ -253,8 +250,6 @@ def _run_scan(target_path: str):
         _ss.eta_segundos = -1.0
         _ss.errores.clear()
         _ss.summary.clear()
-        _ss.ema_scan = 0.0
-        _ss.ema_scan_n = 0
         _ss.ema_anal_spc = 0.0
         _ss.ema_anal_n = 0
         _ss.avg_chars = 0.0
@@ -297,97 +292,96 @@ def _run_scan(target_path: str):
         for aid in disappeared_ids:
             database.mark_archivo_desaparecido(aid)
 
-        # ── MD5 + DB phase (new & modified files) ─────────────────────────────
-        n_hash = len(new_files) + len(modified)
+        # ── Smart BLAKE2b hashing (selective: docs always; non-docs only if
+        #    size-duplicate exists; 8 KB prefix compare before full hash) ──────
+        candidates = [*new_files, *modified]
+        n_candidates = len(candidates)
+        n_hashed = 0
+
         with _lock:
             _ss.hechos = 0
-            _ss.total = n_hash
+            _ss.total = n_candidates
             _ss.archivo_actual = ""
-            _ss.eta_segundos = -1.0 if n_hash > 0 else 0.0
+            _ss.eta_segundos = -1.0
 
+        def _on_hash_progress(ruta: str, hashed: bool):
+            nonlocal n_hashed
+            with _lock:
+                _ss.hechos += 1
+                _ss.archivo_actual = Path(ruta).name
+            if hashed:
+                n_hashed += 1
+
+        hash_map = scanner.smart_hash_files(
+            candidates, disk_files,
+            on_progress=_on_hash_progress,
+            is_cancelled=lambda: _ss.cancelled,
+        )
+
+        # ── Insert new files ──────────────────────────────────────────────────
         cache_hits = 0
         to_analyze: dict[str, int] = {}
 
         for f in new_files:
             if _ss.cancelled:
                 break
-            t0 = time.monotonic()
-            f["hash_md5"] = scanner.compute_md5(Path(f["ruta_actual"]))
-            elapsed = time.monotonic() - t0
-
-            with _lock:
-                _ss.hechos += 1
-                _ss.archivo_actual = f["nombre"]
-                n = _ss.ema_scan_n
-                _ss.ema_scan = (_EMA_ALPHA * elapsed + (1 - _EMA_ALPHA) * _ss.ema_scan
-                                if n else elapsed)
-                _ss.ema_scan_n = n + 1
-                _ss.eta_segundos = _ss.ema_scan * max(_ss.total - _ss.hechos, 0)
-
+            h = hash_map[f["ruta_actual"]]
             aid = database.insert_archivo(
                 nombre=f["nombre"], extension=f["extension"],
                 ruta_actual=f["ruta_actual"], tamaño_bytes=f["tamaño_bytes"],
                 fecha_modificacion=f["fecha_modificacion"],
-                hash_md5=f["hash_md5"], categoria_id=f["categoria_id"],
+                hash_blake2=h, categoria_id=f["categoria_id"],
             )
             database.insert_historial(aid, None, f["ruta_actual"], "indexar")
-            cached = database.get_resumen_by_hash(f["hash_md5"])
-            if cached and cached["resumen_ia"]:
-                database.update_archivo_resumen(aid, cached["resumen_ia"])
-                database.copy_etiquetas(cached["id"], aid)
-                cache_hits += 1
-            else:
-                to_analyze[f["ruta_actual"]] = aid
+            if f["extension"] in scanner.DOC_EXTS:
+                if h:
+                    cached = database.get_resumen_by_hash(h)
+                    if cached and cached["resumen_ia"]:
+                        database.update_archivo_resumen(aid, cached["resumen_ia"])
+                        database.copy_etiquetas(cached["id"], aid)
+                        cache_hits += 1
+                    else:
+                        to_analyze[f["ruta_actual"]] = aid
+                else:
+                    to_analyze[f["ruta_actual"]] = aid
 
+        # ── Update modified files ─────────────────────────────────────────────
         for f in modified:
             if _ss.cancelled:
                 break
-            t0 = time.monotonic()
-            f["hash_md5"] = scanner.compute_md5(Path(f["ruta_actual"]))
-            elapsed = time.monotonic() - t0
-
-            with _lock:
-                _ss.hechos += 1
-                _ss.archivo_actual = f["nombre"]
-                n = _ss.ema_scan_n
-                _ss.ema_scan = (_EMA_ALPHA * elapsed + (1 - _EMA_ALPHA) * _ss.ema_scan
-                                if n else elapsed)
-                _ss.ema_scan_n = n + 1
-                _ss.eta_segundos = _ss.ema_scan * max(_ss.total - _ss.hechos, 0)
-
+            h = hash_map[f["ruta_actual"]]
             database.update_archivo_full(
                 archivo_id=f["db_id"], nombre=f["nombre"], extension=f["extension"],
                 ruta_actual=f["ruta_actual"], tamaño_bytes=f["tamaño_bytes"],
                 fecha_modificacion=f["fecha_modificacion"],
-                hash_md5=f["hash_md5"], categoria_id=f["categoria_id"],
+                hash_blake2=h, categoria_id=f["categoria_id"],
             )
             database.insert_historial(f["db_id"], f["ruta_actual"], f["ruta_actual"], "actualizar")
             database.clear_etiquetas_archivo(f["db_id"])
             database.update_archivo_resumen(f["db_id"], None)
-            cached = database.get_resumen_by_hash(f["hash_md5"])
-            if cached and cached["resumen_ia"]:
-                database.update_archivo_resumen(f["db_id"], cached["resumen_ia"])
-                database.copy_etiquetas(cached["id"], f["db_id"])
-                cache_hits += 1
-            else:
-                to_analyze[f["ruta_actual"]] = f["db_id"]
+            if f["extension"] in scanner.DOC_EXTS:
+                if h:
+                    cached = database.get_resumen_by_hash(h)
+                    if cached and cached["resumen_ia"]:
+                        database.update_archivo_resumen(f["db_id"], cached["resumen_ia"])
+                        database.copy_etiquetas(cached["id"], f["db_id"])
+                        cache_hits += 1
+                    else:
+                        to_analyze[f["ruta_actual"]] = f["db_id"]
+                else:
+                    to_analyze[f["ruta_actual"]] = f["db_id"]
 
         # ── Analysis phase (Ollama, weighted EMA) ─────────────────────────────
-        doc_exts = {".pdf", ".docx", ".doc", ".txt", ".odt", ".xlsx", ".csv"}
-        docs_to_analyze = {
-            ruta: aid for ruta, aid in to_analyze.items()
-            if Path(ruta).suffix.lower() in doc_exts
-        }
-
+        # to_analyze already contains only doc-extension files
         with _lock:
             _ss.fase = "analizando"
             _ss.hechos = 0
-            _ss.total = len(docs_to_analyze)
+            _ss.total = len(to_analyze)
             _ss.archivo_actual = ""
             _ss.eta_segundos = -1.0
             _ss.t_inicio_fase = time.monotonic()
 
-        for ruta, aid in docs_to_analyze.items():
+        for ruta, aid in to_analyze.items():
             if _ss.cancelled:
                 break
             with _lock:
@@ -435,6 +429,7 @@ def _run_scan(target_path: str):
         with _lock:
             _ss.fase = "completado"
             _ss.eta_segundos = 0.0
+            savings_pct = round(100 * (1 - n_hashed / max(n_candidates, 1)))
             _ss.summary = {
                 "unchanged": len(unchanged),
                 "new": len(new_files),
@@ -442,6 +437,9 @@ def _run_scan(target_path: str):
                 "disappeared": len(disappeared_ids),
                 "cache_hits": cache_hits,
                 "cancelled": _ss.cancelled,
+                "hashed": n_hashed,
+                "candidates": n_candidates,
+                "savings_pct": savings_pct,
             }
 
     except Exception as exc:

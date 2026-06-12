@@ -65,35 +65,58 @@ def cli_scan(target_path: str) -> None:
     for aid in disappeared_ids:
         database.mark_archivo_desaparecido(aid)
 
-    # ── Insert new files (compute MD5, check hash cache) ──────────────────────
-    print(f"[+] Inserting {len(new_files)} new file(s)…")
+    # ── Smart BLAKE2b hashing (selective) ────────────────────────────────────
+    candidates = [*new_files, *modified]
+    n_hashed = [0]
+    _hash_count = [0]
+
+    def _hash_progress(ruta: str, hashed: bool):
+        _hash_count[0] += 1
+        if hashed:
+            n_hashed[0] += 1
+        print(f"\r  [{_hash_count[0]}/{len(candidates)}] {Path(ruta).name[:60]}", end="", flush=True)
+
+    print(f"[+] Hashing {len(candidates)} candidate(s) (BLAKE2b, selective)…")
+    hash_map = scanner.smart_hash_files(candidates, disk_files, on_progress=_hash_progress)
+    if candidates:
+        print()
+
+    savings_pct = round(100 * (1 - n_hashed[0] / max(len(candidates), 1)))
+    print(f"    Hasheados: {n_hashed[0]} de {len(candidates)} ({savings_pct}% ahorro)")
+
+    # ── Insert new files ──────────────────────────────────────────────────────
+    print(f"[+] Inserting {len(new_files)} new file(s) into DB…")
     cache_hits = 0
-    to_analyze: dict[str, int] = {}   # ruta → archivo_id (needs Ollama)
+    to_analyze: dict[str, int] = {}
 
     for f in new_files:
-        f["hash_md5"] = scanner.compute_md5(Path(f["ruta_actual"]))
+        h = hash_map[f["ruta_actual"]]
         aid = database.insert_archivo(
             nombre=f["nombre"],
             extension=f["extension"],
             ruta_actual=f["ruta_actual"],
             tamaño_bytes=f["tamaño_bytes"],
             fecha_modificacion=f["fecha_modificacion"],
-            hash_md5=f["hash_md5"],
+            hash_blake2=h,
             categoria_id=f["categoria_id"],
         )
         database.insert_historial(aid, None, f["ruta_actual"], "indexar")
-        cached = database.get_resumen_by_hash(f["hash_md5"])
-        if cached and cached["resumen_ia"]:
-            database.update_archivo_resumen(aid, cached["resumen_ia"])
-            database.copy_etiquetas(cached["id"], aid)
-            cache_hits += 1
-        else:
-            to_analyze[f["ruta_actual"]] = aid
+        if f["extension"] in scanner.DOC_EXTS:
+            if h:
+                cached = database.get_resumen_by_hash(h)
+                if cached and cached["resumen_ia"]:
+                    database.update_archivo_resumen(aid, cached["resumen_ia"])
+                    database.copy_etiquetas(cached["id"], aid)
+                    cache_hits += 1
+                else:
+                    to_analyze[f["ruta_actual"]] = aid
+            else:
+                to_analyze[f["ruta_actual"]] = aid
 
-    # ── Update modified files (recompute MD5, check hash cache) ───────────────
-    print(f"[+] Updating {len(modified)} modified file(s)…")
+    # ── Update modified files ─────────────────────────────────────────────────
+    print(f"[+] Updating {len(modified)} modified file(s) in DB…")
     for f in modified:
-        f["hash_md5"] = scanner.compute_md5(Path(f["ruta_actual"]))
+        h = hash_map[f["ruta_actual"]]
         database.update_archivo_full(
             archivo_id=f["db_id"],
             nombre=f["nombre"],
@@ -101,19 +124,23 @@ def cli_scan(target_path: str) -> None:
             ruta_actual=f["ruta_actual"],
             tamaño_bytes=f["tamaño_bytes"],
             fecha_modificacion=f["fecha_modificacion"],
-            hash_md5=f["hash_md5"],
+            hash_blake2=h,
             categoria_id=f["categoria_id"],
         )
         database.insert_historial(f["db_id"], f["ruta_actual"], f["ruta_actual"], "actualizar")
         database.clear_etiquetas_archivo(f["db_id"])
         database.update_archivo_resumen(f["db_id"], None)
-        cached = database.get_resumen_by_hash(f["hash_md5"])
-        if cached and cached["resumen_ia"]:
-            database.update_archivo_resumen(f["db_id"], cached["resumen_ia"])
-            database.copy_etiquetas(cached["id"], f["db_id"])
-            cache_hits += 1
-        else:
-            to_analyze[f["ruta_actual"]] = f["db_id"]
+        if f["extension"] in scanner.DOC_EXTS:
+            if h:
+                cached = database.get_resumen_by_hash(h)
+                if cached and cached["resumen_ia"]:
+                    database.update_archivo_resumen(f["db_id"], cached["resumen_ia"])
+                    database.copy_etiquetas(cached["id"], f["db_id"])
+                    cache_hits += 1
+                else:
+                    to_analyze[f["ruta_actual"]] = f["db_id"]
+            else:
+                to_analyze[f["ruta_actual"]] = f["db_id"]
 
     # ── Analyse only new/modified documents without a cached resumen ──────────
     doc_exts = {".pdf", ".docx", ".doc", ".txt", ".odt", ".xlsx", ".csv"}
@@ -151,7 +178,8 @@ def cli_scan(target_path: str) -> None:
   Nuevos            : {len(new_files)}
   Modificados       : {len(modified)}
   Desaparecidos     : {len(disappeared_ids)}
-  Análisis evitados : {cache_hits}  (caché de hash MD5)
+  Hasheados         : {n_hashed[0]} de {len(candidates)} ({savings_pct}% ahorro)
+  Análisis evitados : {cache_hits}  (caché BLAKE2b)
 ──────────────────────────────────────────────────────
 Done. Start the web UI with: python main.py
 """)

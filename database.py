@@ -44,6 +44,7 @@ def create_tables():
             fecha_modificacion TEXT,
             fecha_indexado     TEXT,
             hash_md5           TEXT,
+            hash_blake2        TEXT DEFAULT '',
             categoria_id       INTEGER REFERENCES categorias(id),
             resumen_ia         TEXT,
             existe             INTEGER DEFAULT 1
@@ -106,7 +107,12 @@ def create_tables():
 
 
 def migrate_schema():
-    """Idempotent: add columns introduced after initial release."""
+    """Idempotent: add columns introduced after initial release.
+
+    hash_blake2 replaces hash_md5 (BLAKE2b is faster and stdlib-only).
+    Old hash_md5 values are intentionally left in the column but ignored;
+    hash_blake2 is empty for all existing rows and will be filled on next scan.
+    """
     conn = get_connection()
     cur = conn.cursor()
     cur.execute("PRAGMA table_info(archivos)")
@@ -114,23 +120,25 @@ def migrate_schema():
     if "existe" not in existing_cols:
         cur.execute("ALTER TABLE archivos ADD COLUMN existe INTEGER DEFAULT 1")
         cur.execute("UPDATE archivos SET existe = 1 WHERE existe IS NULL")
-        conn.commit()
+    if "hash_blake2" not in existing_cols:
+        cur.execute("ALTER TABLE archivos ADD COLUMN hash_blake2 TEXT DEFAULT ''")
+    conn.commit()
     conn.close()
 
 
 # ── archivos ──────────────────────────────────────────────────────────────────
 
 def insert_archivo(nombre, extension, ruta_actual, tamaño_bytes,
-                   fecha_modificacion, hash_md5, categoria_id, resumen_ia=None):
+                   fecha_modificacion, hash_blake2, categoria_id, resumen_ia=None):
     conn = get_connection()
     cur = conn.cursor()
     cur.execute(
         """INSERT INTO archivos
            (nombre, extension, ruta_actual, tamaño_bytes, fecha_modificacion,
-            fecha_indexado, hash_md5, categoria_id, resumen_ia)
+            fecha_indexado, hash_blake2, categoria_id, resumen_ia)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (nombre, extension, str(ruta_actual), tamaño_bytes, fecha_modificacion,
-         datetime.now().isoformat(), hash_md5, categoria_id, resumen_ia),
+         datetime.now().isoformat(), hash_blake2, categoria_id, resumen_ia),
     )
     archivo_id = cur.lastrowid
     conn.commit()
@@ -214,7 +222,7 @@ def get_all_archivos_indexed() -> dict:
     conn = get_connection()
     cur = conn.cursor()
     cur.execute(
-        "SELECT id, ruta_actual, tamaño_bytes, fecha_modificacion, hash_md5, resumen_ia, existe "
+        "SELECT id, ruta_actual, tamaño_bytes, fecha_modificacion, hash_blake2, resumen_ia, existe "
         "FROM archivos"
     )
     rows = cur.fetchall()
@@ -223,17 +231,17 @@ def get_all_archivos_indexed() -> dict:
 
 
 def update_archivo_full(archivo_id, nombre, extension, ruta_actual, tamaño_bytes,
-                        fecha_modificacion, hash_md5, categoria_id):
+                        fecha_modificacion, hash_blake2, categoria_id):
     """Update metadata for a modified file; preserves resumen_ia and etiquetas rows."""
     conn = get_connection()
     cur = conn.cursor()
     cur.execute(
         """UPDATE archivos
            SET nombre=?, extension=?, ruta_actual=?, tamaño_bytes=?,
-               fecha_modificacion=?, hash_md5=?, categoria_id=?, existe=1
+               fecha_modificacion=?, hash_blake2=?, categoria_id=?, existe=1
            WHERE id=?""",
         (nombre, extension, str(ruta_actual), tamaño_bytes,
-         fecha_modificacion, hash_md5, categoria_id, archivo_id),
+         fecha_modificacion, hash_blake2, categoria_id, archivo_id),
     )
     conn.commit()
     conn.close()
@@ -255,15 +263,15 @@ def mark_archivo_existe(archivo_id):
     conn.close()
 
 
-def get_resumen_by_hash(hash_md5: str) -> dict | None:
-    """Return {id, resumen_ia} for an existing file with matching hash and a non-null resumen."""
-    if not hash_md5:
+def get_resumen_by_hash(hash_blake2: str) -> dict | None:
+    """Return {id, resumen_ia} for an existing file with matching BLAKE2b hash and cached resumen."""
+    if not hash_blake2:
         return None
     conn = get_connection()
     cur = conn.cursor()
     cur.execute(
-        "SELECT id, resumen_ia FROM archivos WHERE hash_md5 = ? AND resumen_ia IS NOT NULL LIMIT 1",
-        (hash_md5,),
+        "SELECT id, resumen_ia FROM archivos WHERE hash_blake2 = ? AND resumen_ia IS NOT NULL LIMIT 1",
+        (hash_blake2,),
     )
     row = cur.fetchone()
     conn.close()
