@@ -1,5 +1,4 @@
 import json
-import re
 import zipfile
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -11,6 +10,25 @@ from ollama_client import call_ollama
 
 _DOCX_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 _XLSX_NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+
+# ── Validation constants ──────────────────────────────────────────────────────
+
+_VALID_CATEGORIAS = frozenset({
+    "Documentos", "Imágenes", "Audio", "Vídeo", "Código",
+    "Datos", "Comprimidos", "Programas", "Desconocido",
+})
+
+# JSON Schema sent to Ollama — constrains keys and types; category enum is
+# validated separately so old models that can't honour enums still work.
+_ANALYSIS_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "categoria":  {"type": "string"},
+        "etiquetas":  {"type": "array", "items": {"type": "string"}},
+        "resumen":    {"type": "string"},
+    },
+    "required": ["categoria", "etiquetas", "resumen"],
+}
 
 
 # ── text extraction ───────────────────────────────────────────────────────────
@@ -82,38 +100,91 @@ def extract_text(path: Path, extension: str) -> str:
     return ""
 
 
+# ── Validation ────────────────────────────────────────────────────────────────
+
+def _validate_analysis(data) -> dict:
+    """Normalize and validate an Ollama analysis result.
+
+    Returns a dict with keys {categoria, etiquetas, resumen} on success,
+    or {} if *data* is not a dict (caller should retry).
+
+    Rules
+    -----
+    - categoria: must be in _VALID_CATEGORIAS; otherwise "Desconocido".
+    - etiquetas: must be a list of strings; a bare string is wrapped in a list;
+      non-string elements are discarded; stripped and capped at 5 items.
+    - resumen: coerced to str, stripped, truncated to 300 characters.
+    """
+    if not isinstance(data, dict):
+        return {}
+
+    # categoria
+    categoria = data.get("categoria", "")
+    if categoria not in _VALID_CATEGORIAS:
+        categoria = "Desconocido"
+
+    # etiquetas
+    raw_tags = data.get("etiquetas", [])
+    if isinstance(raw_tags, str):
+        raw_tags = [raw_tags]
+    elif not isinstance(raw_tags, list):
+        raw_tags = []
+    etiquetas = [
+        e.strip() for e in raw_tags
+        if isinstance(e, str) and e.strip()
+    ][:5]
+
+    # resumen
+    resumen = data.get("resumen", "")
+    if not isinstance(resumen, str):
+        resumen = str(resumen)
+    resumen = resumen.strip()[:300]
+
+    return {"categoria": categoria, "etiquetas": etiquetas, "resumen": resumen}
+
+
 # ── Ollama analysis ───────────────────────────────────────────────────────────
 
 def analyze_with_ollama(text: str, filename: str) -> dict:
+    """Call Ollama with JSON Schema format and validate the result.
+
+    Retries once on parse failure or non-dict response.
+    Returns {} if both attempts fail or if Ollama is unavailable.
+    """
     prompt = (
         f'Analyze this document named "{filename}". '
-        'Reply ONLY in JSON with no extra text, no markdown, no explanation:\n'
-        '{"categoria": "one of: Documentos, Imágenes, Audio, Vídeo, Código, Datos, '
-        'Comprimidos, Programas, Desconocido", '
-        '"etiquetas": ["tag1", "tag2", "tag3"], '
-        '"resumen": "max 2 sentences"}\n\n'
+        "Respond in JSON with keys: categoria, etiquetas (list of tags), resumen.\n\n"
         f"Document content:\n{text[:2500]}"
     )
-    try:
-        raw = call_ollama(ANALYSIS_MODEL, prompt)
-    except RuntimeError:
-        return {}
-    if not raw:
-        return {}
 
-    try:
-        match = re.search(r"\{.*?\}", raw, re.DOTALL)
-        if match:
-            return json.loads(match.group())
-        return json.loads(raw)
-    except (json.JSONDecodeError, ValueError):
-        return {}
+    for _attempt in range(2):
+        try:
+            raw = call_ollama(ANALYSIS_MODEL, prompt, fmt=_ANALYSIS_SCHEMA)
+        except RuntimeError:
+            return {}
+        if not raw:
+            continue
+
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+
+        result = _validate_analysis(data)
+        if result is not None and isinstance(result, dict) and len(result) == 3:
+            return result
+
+    return {}
 
 
 # ── public API ────────────────────────────────────────────────────────────────
 
 def analyze_file(path: Path, extension: str) -> dict:
-    """Extract text and analyze. Returns dict with categoria, etiquetas, resumen, _text_len."""
+    """Extract text and analyze with Ollama.
+
+    Returns a dict with keys {categoria, etiquetas, resumen, _text_len},
+    or {} if the file has no extractable text or analysis fails.
+    """
     text = extract_text(path, extension)
     if not text.strip():
         return {}
