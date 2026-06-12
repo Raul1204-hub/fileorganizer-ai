@@ -70,10 +70,10 @@
 </div>
 
 <!-- ── Grupos por categoría ───────────────────────────────────────────────── -->
-{% set cat_colors = {
-  'Documentos':'#4F46E5','Imágenes':'#10B981','Audio':'#F59E0B',
-  'Vídeo':'#EF4444','Código':'#8B5CF6','Datos':'#06B6D4',
-  'Comprimidos':'#6B7280','Programas':'#F97316','Desconocido':'#9CA3AF'
+{% set cat_bg = {
+  'Documentos':'bg-indigo-600','Imágenes':'bg-emerald-500','Audio':'bg-amber-500',
+  'Vídeo':'bg-red-500','Código':'bg-violet-500','Datos':'bg-cyan-500',
+  'Comprimidos':'bg-gray-500','Programas':'bg-orange-500','Desconocido':'bg-gray-400'
 } %}
 {% set cat_icons = {
   'Documentos':'📄','Imágenes':'🖼️','Audio':'🎵','Vídeo':'🎬',
@@ -82,8 +82,8 @@
 
 <div class="space-y-4">
 {% for cat_nombre, archivos in grupos.items() | sort %}
-{% set color = cat_colors.get(cat_nombre, '#9CA3AF') %}
-{% set icon  = cat_icons.get(cat_nombre, '📁') %}
+{% set bg   = cat_bg.get(cat_nombre, 'bg-gray-400') %}
+{% set icon = cat_icons.get(cat_nombre, '📁') %}
 <div class="bg-white dark:bg-gray-900 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-800 overflow-hidden">
 
   <!-- Cabecera del grupo -->
@@ -96,7 +96,7 @@
              checked>
       <span class="text-lg">{{ icon }}</span>
       <span class="font-semibold text-sm text-gray-900 dark:text-white">{{ cat_nombre }}</span>
-      <span class="badge text-white text-xs" style="background:{{ color }}">{{ archivos|length }} archivos</span>
+      <span class="badge text-white text-xs {{ bg }}">{{ archivos|length }} archivos</span>
       <span class="text-xs text-gray-400">{{ archivos | sum(attribute='tamaño_bytes') | format_size }}</span>
     </div>
     <i class="fa-solid fa-chevron-down text-gray-400 text-xs transition-transform" id="chevron-{{ loop.index }}"></i>
