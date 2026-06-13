@@ -23,6 +23,7 @@ import chat as chat_module
 import database
 import embeddings as _embed_module
 import organizer
+import planner
 import recommendations
 import renamer
 import scanner
@@ -685,7 +686,7 @@ def api_approve():
                 dst = dst.parent / f"{stem}_{n}{suffix}"
                 n += 1
 
-        ok = organizer.execute_move(row["id"], ruta_actual, str(dst))
+        ok, _msg = organizer.execute_move(row["id"], ruta_actual, str(dst))
         results.append({"ruta": ruta_actual, "success": ok, "destino": str(dst)})
 
     return jsonify({"results": results})
@@ -876,6 +877,251 @@ def api_aplicar_renombrado():
             "failed": fail_count,
             "errores": errores[:5],
             "message": f"{ok_count} archivo(s) renombrado(s). {fail_count} error(es).",
+        }
+    )
+
+
+# ── Plan de organización ─────────────────────────────────────────────────────
+
+_plan_apply_states: dict[int, dict] = {}
+_plan_lock = threading.Lock()
+
+
+def _run_plan_apply(plan_id: int) -> None:
+    """Background thread: apply approved plan items one by one."""
+    with _plan_lock:
+        _plan_apply_states[plan_id] = {
+            "running": True,
+            "total": 0,
+            "hechos": 0,
+            "ok": 0,
+            "errors": 0,
+            "current": "",
+            "results": [],
+        }
+    try:
+        items = [i for i in database.get_plan_items(plan_id) if i["estado"] == "aprobado"]
+        with _plan_lock:
+            _plan_apply_states[plan_id]["total"] = len(items)
+        database.update_plan_estado(plan_id, "en_progreso")
+
+        for item in items:
+            if not _plan_apply_states.get(plan_id, {}).get("running"):
+                break
+            nombre = Path(item["origen"]).name
+            with _plan_lock:
+                _plan_apply_states[plan_id]["current"] = nombre
+
+            src = Path(item["origen"])
+            dst = Path(item["destino"])
+
+            if not src.exists():
+                err = f"Archivo no encontrado: {nombre}"
+                database.update_plan_item_estado(item["id"], "error", err)
+                with _plan_lock:
+                    st = _plan_apply_states[plan_id]
+                    st["errors"] += 1
+                    st["hechos"] += 1
+                    st["results"].append({"id": item["id"], "ok": False, "msg": err})
+                continue
+
+            # Collision resolution before moving
+            if dst.exists() and dst.resolve() != src.resolve():
+                stem, suffix, n = dst.stem, dst.suffix, 2
+                while dst.exists():
+                    dst = dst.parent / f"{stem}-{n}{suffix}"
+                    n += 1
+                database.update_plan_item_destino(item["id"], str(dst))
+
+            ok, msg = organizer.execute_move(item["archivo_id"], str(src), str(dst))
+            if ok:
+                backup = database.get_latest_backup_for_archivo(item["archivo_id"])
+                database.update_plan_item_estado(
+                    item["id"],
+                    "aplicado",
+                    backup_id=backup["id"] if backup else None,
+                )
+                with _plan_lock:
+                    st = _plan_apply_states[plan_id]
+                    st["ok"] += 1
+                    st["hechos"] += 1
+                    st["results"].append({"id": item["id"], "ok": True, "msg": "Aplicado"})
+            else:
+                database.update_plan_item_estado(item["id"], "error", msg)
+                with _plan_lock:
+                    st = _plan_apply_states[plan_id]
+                    st["errors"] += 1
+                    st["hechos"] += 1
+                    st["results"].append({"id": item["id"], "ok": False, "msg": msg})
+
+        database.update_plan_stats(plan_id)
+        database.update_plan_estado(plan_id, "completado", time.strftime("%Y-%m-%dT%H:%M:%S"))
+
+    except Exception as exc:
+        _wlog.error("plan_apply error plan_id=%d: %s", plan_id, exc)
+        with _plan_lock:
+            if plan_id in _plan_apply_states:
+                _plan_apply_states[plan_id]["error"] = str(exc)
+    finally:
+        with _plan_lock:
+            if plan_id in _plan_apply_states:
+                _plan_apply_states[plan_id]["running"] = False
+
+
+@app.route("/plan")
+def plan_list():
+    planes = database.get_planes_recientes(limit=20)
+    return render_template("plan.html", planes=planes)
+
+
+@app.route("/plan/<int:plan_id>")
+def plan_detail(plan_id):
+    plan = database.get_plan(plan_id)
+    if not plan:
+        return "Plan no encontrado", 404
+
+    from collections import defaultdict
+
+    items = database.get_plan_items(plan_id)
+    grupos: dict[str, list] = defaultdict(list)
+    for item in items:
+        item["destino_dir"] = str(Path(item["destino"]).parent)
+        item["destino_nombre"] = Path(item["destino"]).name
+        grupos[item["destino_dir"]].append(item)
+
+    grupos_sorted = dict(sorted(grupos.items()))
+    destinos_unicos = sorted(grupos_sorted.keys())
+
+    total_aprobados = sum(1 for i in items if i["estado"] == "aprobado")
+    total_rechazados = sum(1 for i in items if i["estado"] == "rechazado")
+    total_aplicados = sum(1 for i in items if i["estado"] == "aplicado")
+    total_errores = sum(1 for i in items if i["estado"] == "error")
+    total_bytes = sum((i.get("tamaño_bytes") or 0) for i in items if i["estado"] == "aprobado")
+
+    return render_template(
+        "plan_detail.html",
+        plan=plan,
+        grupos=grupos_sorted,
+        destinos_unicos=destinos_unicos,
+        items=items,
+        total_aprobados=total_aprobados,
+        total_rechazados=total_rechazados,
+        total_aplicados=total_aplicados,
+        total_errores=total_errores,
+        total_bytes=total_bytes,
+    )
+
+
+@app.route("/api/plan/generar", methods=["POST"])
+def api_plan_generar():
+    data = request.get_json() or {}
+    carpeta_raiz = (data.get("carpeta_raiz") or "").strip()
+    if not carpeta_raiz:
+        return jsonify({"error": "Ruta raíz no proporcionada"}), 400
+    if not Path(carpeta_raiz).is_dir():
+        return jsonify({"error": f"La carpeta no existe: {carpeta_raiz}"}), 400
+    archivo_ids_raw = data.get("archivo_ids") or []
+    archivo_ids = [int(i) for i in archivo_ids_raw if str(i).lstrip("-").isdigit()] or None
+    plan_id = planner.generar_plan(carpeta_raiz, archivo_ids)
+    plan = database.get_plan(plan_id)
+    return jsonify({"plan_id": plan_id, "total_items": plan["total_items"]})
+
+
+@app.route("/api/plan/<int:plan_id>/items/<int:item_id>", methods=["PATCH"])
+def api_plan_update_item(plan_id, item_id):
+    item = database.get_plan_item(item_id)
+    if not item or item["plan_id"] != plan_id:
+        return jsonify({"error": "Item no encontrado"}), 404
+    if item["estado"] in ("aplicado", "error"):
+        return jsonify({"error": "Item ya ejecutado"}), 409
+
+    data = request.get_json() or {}
+
+    if "estado" in data:
+        nuevo = data["estado"]
+        if nuevo not in ("aprobado", "rechazado"):
+            return jsonify({"error": "Estado inválido"}), 400
+        database.update_plan_item_estado(item_id, nuevo)
+
+    if "destino_dir" in data:
+        nuevo_dir = data["destino_dir"].strip()
+        if nuevo_dir:
+            nombre = Path(item["origen"]).name
+            nuevo_destino = str(Path(nuevo_dir) / nombre)
+            database.update_plan_item_destino(item_id, nuevo_destino)
+
+    return jsonify({"success": True})
+
+
+@app.route("/api/plan/<int:plan_id>/items/bulk", methods=["POST"])
+def api_plan_items_bulk(plan_id):
+    data = request.get_json() or {}
+    ids = [int(i) for i in data.get("item_ids", []) if str(i).lstrip("-").isdigit()]
+    nuevo = data.get("estado", "")
+    if nuevo not in ("aprobado", "rechazado"):
+        return jsonify({"error": "Estado inválido"}), 400
+    if not ids:
+        return jsonify({"error": "Sin items"}), 400
+    database.update_plan_items_estado_bulk(plan_id, ids, nuevo)
+    return jsonify({"success": True, "updated": len(ids)})
+
+
+@app.route("/api/plan/<int:plan_id>/aplicar", methods=["POST"])
+def api_plan_aplicar(plan_id):
+    plan = database.get_plan(plan_id)
+    if not plan:
+        return jsonify({"error": "Plan no encontrado"}), 404
+    with _plan_lock:
+        if _plan_apply_states.get(plan_id, {}).get("running"):
+            return jsonify({"error": "Aplicación ya en curso"}), 409
+    thread = threading.Thread(target=_run_plan_apply, args=(plan_id,), daemon=True)
+    thread.start()
+    return jsonify({"message": "Aplicación iniciada"})
+
+
+@app.route("/api/plan/<int:plan_id>/progress")
+def api_plan_progress(plan_id):
+    def _gen():
+        while True:
+            state = _plan_apply_states.get(plan_id, {"running": False, "hechos": 0, "total": 0})
+            yield f"data: {json.dumps(state)}\n\n"
+            if not state.get("running"):
+                break
+            time.sleep(0.6)
+
+    return Response(
+        stream_with_context(_gen()),
+        mimetype="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.route("/api/plan/<int:plan_id>/deshacer", methods=["POST"])
+def api_plan_deshacer(plan_id):
+    items = [i for i in database.get_plan_items(plan_id) if i["estado"] == "aplicado"]
+    items.reverse()  # undo in reverse order
+
+    ok_count = fail_count = 0
+    for item in items:
+        if item["backup_id"]:
+            ok, _msg = organizer.undo_operation(item["backup_id"])
+            if ok:
+                database.update_plan_item_estado(item["id"], "aprobado")
+                ok_count += 1
+            else:
+                fail_count += 1
+        else:
+            fail_count += 1
+
+    database.update_plan_stats(plan_id)
+    if ok_count:
+        database.update_plan_estado(plan_id, "borrador")
+
+    return jsonify(
+        {
+            "ok": ok_count,
+            "failed": fail_count,
+            "message": f"Revertidos {ok_count} movimiento(s). {fail_count} error(es).",
         }
     )
 

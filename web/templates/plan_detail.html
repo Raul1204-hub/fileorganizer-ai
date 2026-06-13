@@ -1,0 +1,472 @@
+{% extends "base.html" %}
+{% block title %}Plan #{{ plan.id }} · FileOrganizer AI{% endblock %}
+{% block page_title %}Plan de organización{% endblock %}
+
+{% block head %}
+<style>
+  .file-row.rechazado td { opacity: 0.4; }
+  .file-row.rechazado td:first-child { opacity: 1; }
+  .file-row.aplicado td:first-child { opacity: 0.5; }
+  .dest-input {
+    width: 100%;
+    background: transparent;
+    border-bottom: 1px solid transparent;
+    font-size: 0.75rem;
+    padding: 0 2px;
+    outline: none;
+    color: inherit;
+    min-width: 0;
+  }
+  .dest-input:hover, .dest-input:focus {
+    border-bottom-color: #6366F1;
+  }
+  .dest-input:disabled { cursor: default; }
+  .group-section { margin-bottom: 1.25rem; }
+</style>
+{% endblock %}
+
+{% block content %}
+
+<!-- Progress panel (fixed bottom, hidden by default) -->
+<div id="plan-progress-panel"
+     class="hidden fixed bottom-0 left-60 right-0 z-40 bg-white dark:bg-gray-900
+            border-t border-gray-200 dark:border-gray-800 shadow-lg px-6 py-3">
+  <div class="max-w-4xl flex flex-col gap-1.5">
+    <div class="flex items-center justify-between">
+      <span class="text-sm font-medium text-gray-800 dark:text-gray-100 flex items-center gap-2">
+        <i class="fa-solid fa-spinner fa-spin text-cyan-500"></i>
+        <span id="pp-text">Aplicando…</span>
+      </span>
+      <span id="pp-stats" class="text-xs text-gray-400"></span>
+    </div>
+    <div class="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-1.5 overflow-hidden">
+      <div id="pp-bar" class="h-full bg-cyan-500 rounded-full transition-all duration-300"
+           style="width:0%"></div>
+    </div>
+    <div id="pp-current" class="text-xs text-gray-400 truncate"></div>
+  </div>
+</div>
+
+<!-- Header -->
+<div class="flex flex-wrap items-start justify-between gap-3 mb-5">
+  <div>
+    <div class="flex items-center gap-2 mb-1">
+      <a href="/plan" class="text-xs text-gray-400 hover:text-gray-600 dark:hover:text-gray-200">
+        <i class="fa-solid fa-arrow-left mr-1"></i>Todos los planes
+      </a>
+    </div>
+    <h1 class="text-xl font-bold text-gray-900 dark:text-white">Plan #{{ plan.id }}</h1>
+    <p class="text-sm text-gray-500 dark:text-gray-400 mt-0.5 break-all">
+      <i class="fa-solid fa-folder text-gray-300 mr-1"></i>{{ plan.carpeta_raiz }}
+    </p>
+  </div>
+
+  <div class="flex gap-2 shrink-0">
+    <button id="btn-undo" onclick="deshacerPlan()"
+            class="flex items-center gap-1.5 px-3 py-2 bg-amber-50 dark:bg-amber-950
+                   hover:bg-amber-100 dark:hover:bg-amber-900 text-amber-700 dark:text-amber-300
+                   rounded-lg text-sm font-medium transition
+                   {% if total_aplicados == 0 %}opacity-40 pointer-events-none{% endif %}">
+      <i class="fa-solid fa-rotate-left"></i> Deshacer plan
+    </button>
+    <button id="btn-apply" onclick="aplicarPlan()"
+            {% if total_aprobados == 0 %}disabled{% endif %}
+            class="flex items-center gap-1.5 px-4 py-2 bg-cyan-600 hover:bg-cyan-700
+                   text-white rounded-lg text-sm font-medium transition
+                   disabled:opacity-40 disabled:cursor-not-allowed">
+      <i class="fa-solid fa-play"></i> Aplicar plan
+    </button>
+  </div>
+</div>
+
+<!-- Stats row -->
+<div class="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-5">
+  <div class="bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 p-4">
+    <div class="text-xs text-gray-400 mb-1 uppercase tracking-wide">Aprobados</div>
+    <div class="text-xl font-bold text-emerald-600 dark:text-emerald-400" id="stat-aprobados">
+      {{ total_aprobados }}
+    </div>
+  </div>
+  <div class="bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 p-4">
+    <div class="text-xs text-gray-400 mb-1 uppercase tracking-wide">Omitidos</div>
+    <div class="text-xl font-bold text-gray-400 dark:text-gray-500" id="stat-rechazados">
+      {{ total_rechazados }}
+    </div>
+  </div>
+  <div class="bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 p-4">
+    <div class="text-xs text-gray-400 mb-1 uppercase tracking-wide">Aplicados</div>
+    <div class="text-xl font-bold text-blue-600 dark:text-blue-400" id="stat-aplicados">
+      {{ total_aplicados }}
+    </div>
+  </div>
+  <div class="bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 p-4">
+    <div class="text-xs text-gray-400 mb-1 uppercase tracking-wide">Espacio a mover</div>
+    <div class="text-xl font-bold text-gray-700 dark:text-gray-200" id="stat-bytes">
+      {{ total_bytes | format_size }}
+    </div>
+  </div>
+</div>
+
+{% if not grupos %}
+<div class="text-center py-16 text-gray-400">
+  <i class="fa-solid fa-circle-check text-4xl mb-3 block text-emerald-400 opacity-60"></i>
+  <p class="text-sm font-medium">Todos los archivos ya están en su lugar correcto.</p>
+  <p class="text-xs mt-1">No hay movimientos necesarios para esta carpeta raíz.</p>
+</div>
+{% else %}
+
+<!-- Toolbar -->
+<div class="flex flex-wrap items-center gap-3 mb-4">
+  <div class="relative flex-1 min-w-48">
+    <i class="fa-solid fa-search absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-xs"></i>
+    <input id="filter-input" type="text" placeholder="Buscar archivos…"
+           oninput="filterRows()"
+           class="w-full pl-8 pr-3 py-2 text-sm bg-white dark:bg-gray-900 border
+                  border-gray-200 dark:border-gray-700 rounded-lg focus:outline-none
+                  focus:border-indigo-400 text-gray-900 dark:text-gray-100">
+  </div>
+  <button onclick="selectAll(true)"
+          class="px-3 py-2 text-xs font-medium bg-emerald-50 dark:bg-emerald-950
+                 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-100 rounded-lg transition">
+    <i class="fa-solid fa-check-double mr-1"></i>Aprobar todo
+  </button>
+  <button onclick="selectAll(false)"
+          class="px-3 py-2 text-xs font-medium bg-gray-100 dark:bg-gray-800
+                 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-700
+                 rounded-lg transition">
+    <i class="fa-solid fa-xmark mr-1"></i>Omitir todo
+  </button>
+</div>
+
+<!-- Datalist for destination autocompletion -->
+<datalist id="destinos-list">
+  {% for d in destinos_unicos %}<option value="{{ d }}">{% endfor %}
+</datalist>
+
+<!-- Grouped table -->
+{% for folder, group_items in grupos.items() %}
+<div class="group-section bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 overflow-hidden">
+
+  <!-- Group header -->
+  <div class="flex items-center gap-3 px-4 py-3 bg-gray-50 dark:bg-gray-800/50
+              border-b border-gray-100 dark:border-gray-800 cursor-pointer select-none"
+       onclick="toggleGroup(this)">
+    <i class="fa-solid fa-folder-open text-yellow-500 shrink-0"></i>
+    <span class="text-sm font-medium text-gray-700 dark:text-gray-200 flex-1 truncate">
+      {{ folder }}
+    </span>
+    <span class="badge bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-300 text-xs shrink-0">
+      {{ group_items | length }}
+    </span>
+    <i class="fa-solid fa-chevron-up text-gray-300 text-xs group-chevron shrink-0"></i>
+  </div>
+
+  <!-- Items table -->
+  <div class="group-body overflow-x-auto">
+    <table class="w-full text-sm">
+      <thead>
+        <tr class="border-b border-gray-50 dark:border-gray-800">
+          <th class="w-8 py-2 px-3"></th>
+          <th class="py-2 px-3 text-left text-xs font-medium text-gray-400 dark:text-gray-500">Archivo</th>
+          <th class="py-2 px-3 text-right text-xs font-medium text-gray-400 dark:text-gray-500 whitespace-nowrap">Tamaño</th>
+          <th class="py-2 px-3 text-left text-xs font-medium text-gray-400 dark:text-gray-500 hidden lg:table-cell">Origen</th>
+          <th class="py-2 px-3 text-left text-xs font-medium text-gray-400 dark:text-gray-500">Carpeta destino</th>
+          <th class="py-2 px-3 text-center text-xs font-medium text-gray-400 dark:text-gray-500">Estado</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for item in group_items %}
+        <tr id="row-{{ item.id }}"
+            data-item-id="{{ item.id }}"
+            data-estado="{{ item.estado }}"
+            data-bytes="{{ item.tamaño_bytes or 0 }}"
+            class="file-row {{ item.estado }} border-b border-gray-50 dark:border-gray-800/40
+                   hover:bg-gray-50/50 dark:hover:bg-gray-800/20 transition-colors">
+
+          <!-- Checkbox -->
+          <td class="py-2 px-3 w-8">
+            <input type="checkbox"
+                   class="item-checkbox w-4 h-4 rounded accent-cyan-500 cursor-pointer"
+                   data-item-id="{{ item.id }}"
+                   {% if item.estado != 'rechazado' %}checked{% endif %}
+                   {% if item.estado in ('aplicado', 'error') %}disabled{% endif %}
+                   onchange="toggleItem({{ item.id }}, this.checked)">
+          </td>
+
+          <!-- Filename -->
+          <td class="py-2 px-3 min-w-0">
+            <span class="font-medium text-gray-800 dark:text-gray-200 truncate block max-w-[200px]"
+                  title="{{ item.destino_nombre }}">{{ item.destino_nombre }}</span>
+            {% if item.cat_nombre %}
+            <span class="text-xs" style="color:{{ item.cat_color or '#9CA3AF' }}">
+              {{ item.cat_icono or '' }} {{ item.cat_nombre }}
+            </span>
+            {% endif %}
+          </td>
+
+          <!-- Size -->
+          <td class="py-2 px-3 text-right text-xs text-gray-500 dark:text-gray-400 whitespace-nowrap">
+            {{ (item.tamaño_bytes or 0) | format_size }}
+          </td>
+
+          <!-- Origin (short) -->
+          <td class="py-2 px-3 text-xs text-gray-400 hidden lg:table-cell max-w-[180px]">
+            <span class="truncate block" title="{{ item.origen }}">
+              …{{ item.origen[-50:] if item.origen|length > 50 else item.origen }}
+            </span>
+          </td>
+
+          <!-- Destination (editable) -->
+          <td class="py-2 px-3 min-w-[180px]">
+            <div class="flex items-center gap-1 group/dest">
+              <input type="text"
+                     class="dest-input text-gray-600 dark:text-gray-300"
+                     value="{{ item.destino_dir }}"
+                     list="destinos-list"
+                     title="Editar carpeta destino"
+                     onblur="updateDestino({{ item.id }}, this.value)"
+                     onkeydown="if(event.key==='Enter')this.blur()"
+                     {% if item.estado in ('aplicado', 'error') %}disabled{% endif %}>
+              <i class="fa-solid fa-pencil text-gray-300 dark:text-gray-600 text-xs
+                         opacity-0 group-hover/dest:opacity-100 transition shrink-0
+                         {% if item.estado in ('aplicado', 'error') %}hidden{% endif %}"></i>
+            </div>
+          </td>
+
+          <!-- Status badge -->
+          <td class="py-2 px-3 text-center whitespace-nowrap">
+            {% set badge_map = {
+              'aprobado': ('bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300', 'Aprobado'),
+              'rechazado': ('bg-gray-100 text-gray-400 dark:bg-gray-800 dark:text-gray-500', 'Omitido'),
+              'aplicado': ('bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300', '✓ Aplicado'),
+              'error': ('bg-red-100 text-red-600 dark:bg-red-950 dark:text-red-400', 'Error'),
+            } %}
+            {% set bclass, blabel = badge_map.get(item.estado, ('bg-gray-100 text-gray-400', item.estado)) %}
+            <span id="badge-{{ item.id }}"
+                  class="badge text-xs {{ bclass }}"
+                  title="{{ item.mensaje_error or '' }}">
+              {{ blabel }}
+            </span>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endfor %}
+
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+const PLAN_ID = {{ plan.id }};
+let _applying = false;
+let _sseSource = null;
+const _seen = new Set();
+
+// ── Format size ───────────────────────────────────────────────────────────────
+function formatSize(b) {
+  if (!b) return '0 B';
+  const u = ['B','KB','MB','GB','TB'];
+  let v = b, i = 0;
+  while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
+  return v.toFixed(1) + ' ' + u[i];
+}
+
+// ── Group accordion ───────────────────────────────────────────────────────────
+function toggleGroup(header) {
+  const body = header.nextElementSibling;
+  const icon = header.querySelector('.group-chevron');
+  const collapsed = body.style.display === 'none';
+  body.style.display = collapsed ? '' : 'none';
+  if (icon) icon.style.transform = collapsed ? '' : 'rotate(180deg)';
+}
+
+// ── Row state ─────────────────────────────────────────────────────────────────
+const BADGE_CLASSES = {
+  aprobado: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300',
+  rechazado: 'bg-gray-100 text-gray-400 dark:bg-gray-800 dark:text-gray-500',
+  aplicado: 'bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300',
+  error: 'bg-red-100 text-red-600 dark:bg-red-950 dark:text-red-400',
+};
+const BADGE_LABELS = {
+  aprobado: 'Aprobado', rechazado: 'Omitido', aplicado: '✓ Aplicado', error: 'Error',
+};
+
+function setRowEstado(itemId, estado) {
+  const row = document.getElementById('row-' + itemId);
+  if (!row) return;
+  row.dataset.estado = estado;
+  // Reset classes
+  row.classList.remove('aprobado', 'rechazado', 'aplicado', 'error');
+  row.classList.add(estado);
+  const badge = document.getElementById('badge-' + itemId);
+  if (badge) {
+    badge.className = 'badge text-xs ' + (BADGE_CLASSES[estado] || '');
+    badge.textContent = BADGE_LABELS[estado] || estado;
+  }
+}
+
+// ── Checkbox toggle ───────────────────────────────────────────────────────────
+function toggleItem(itemId, checked) {
+  const estado = checked ? 'aprobado' : 'rechazado';
+  fetch(`/api/plan/${PLAN_ID}/items/${itemId}`, {
+    method: 'PATCH',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({estado}),
+  });
+  setRowEstado(itemId, estado);
+  refreshStats();
+}
+
+// ── Stats refresh ─────────────────────────────────────────────────────────────
+function refreshStats() {
+  let ap = 0, re = 0, apl = 0, bytes = 0;
+  document.querySelectorAll('.file-row').forEach(row => {
+    const e = row.dataset.estado;
+    if (e === 'aprobado') { ap++; bytes += parseInt(row.dataset.bytes) || 0; }
+    else if (e === 'rechazado') re++;
+    else if (e === 'aplicado') apl++;
+  });
+  const set = (id, v) => { const el = document.getElementById(id); if(el) el.textContent = v; };
+  set('stat-aprobados', ap);
+  set('stat-rechazados', re);
+  set('stat-aplicados', apl);
+  set('stat-bytes', formatSize(bytes));
+  const btn = document.getElementById('btn-apply');
+  if (btn) btn.disabled = _applying || ap === 0;
+}
+
+// ── Destination editing ───────────────────────────────────────────────────────
+function updateDestino(itemId, nuevoDir) {
+  if (!nuevoDir || !nuevoDir.trim()) return;
+  fetch(`/api/plan/${PLAN_ID}/items/${itemId}`, {
+    method: 'PATCH',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({destino_dir: nuevoDir.trim()}),
+  }).catch(() => showToast('Error al guardar destino', 'error'));
+}
+
+// ── Select all / none ─────────────────────────────────────────────────────────
+async function selectAll(approved) {
+  const estado = approved ? 'aprobado' : 'rechazado';
+  const ids = Array.from(document.querySelectorAll('.file-row'))
+    .filter(r => !['aplicado','error'].includes(r.dataset.estado))
+    .map(r => parseInt(r.dataset.itemId));
+  if (!ids.length) return;
+
+  await fetch(`/api/plan/${PLAN_ID}/items/bulk`, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({item_ids: ids, estado}),
+  });
+
+  document.querySelectorAll('.file-row').forEach(row => {
+    if (['aplicado','error'].includes(row.dataset.estado)) return;
+    const cb = row.querySelector('.item-checkbox');
+    if (cb) cb.checked = approved;
+    setRowEstado(parseInt(row.dataset.itemId), estado);
+  });
+  refreshStats();
+}
+
+// ── Filter ────────────────────────────────────────────────────────────────────
+function filterRows() {
+  const q = (document.getElementById('filter-input').value || '').toLowerCase();
+  document.querySelectorAll('.file-row').forEach(row => {
+    row.style.display = !q || row.textContent.toLowerCase().includes(q) ? '' : 'none';
+  });
+  document.querySelectorAll('.group-section').forEach(sec => {
+    const visible = sec.querySelectorAll('.file-row:not([style*="display: none"])').length;
+    sec.style.display = visible > 0 ? '' : 'none';
+  });
+}
+
+// ── Apply ─────────────────────────────────────────────────────────────────────
+async function aplicarPlan() {
+  const ap = parseInt(document.getElementById('stat-aprobados').textContent || '0');
+  if (!ap) { showToast('Sin movimientos aprobados', 'warning'); return; }
+  if (!confirm(`¿Mover ${ap} archivo(s) al disco? Esto puede tardar si hay archivos grandes.`)) return;
+
+  _applying = true;
+  const btn = document.getElementById('btn-apply');
+  if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Aplicando…'; }
+
+  const panel = document.getElementById('plan-progress-panel');
+  if (panel) panel.classList.remove('hidden');
+
+  const res = await fetch(`/api/plan/${PLAN_ID}/aplicar`, {method: 'POST'});
+  const data = await res.json();
+  if (!res.ok) {
+    showToast(data.error || 'Error al iniciar', 'error');
+    _applying = false;
+    if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fa-solid fa-play"></i> Aplicar plan'; }
+    return;
+  }
+
+  _sseSource = new EventSource(`/api/plan/${PLAN_ID}/progress`);
+  _sseSource.onmessage = e => {
+    const s = JSON.parse(e.data);
+    updateProgressUI(s);
+    if (!s.running) {
+      _sseSource.close();
+      _applying = false;
+      showToast(`Plan aplicado — ${s.ok} OK · ${s.errors} error(es)`, s.errors ? 'warning' : 'success');
+      setTimeout(() => location.reload(), 1800);
+    }
+  };
+  _sseSource.onerror = () => {
+    _sseSource.close();
+    _applying = false;
+    showToast('Conexión SSE perdida — recarga para ver el estado', 'error');
+  };
+}
+
+function updateProgressUI(s) {
+  const pct = s.total > 0 ? Math.round((s.hechos / s.total) * 100) : 0;
+  const bar = document.getElementById('pp-bar');
+  if (bar) bar.style.width = pct + '%';
+  const setText = (id, v) => { const el = document.getElementById(id); if(el) el.textContent = v; };
+  setText('pp-text',    `Aplicando… ${s.hechos} / ${s.total}`);
+  setText('pp-stats',   `✓ ${s.ok}  ·  ✗ ${s.errors}`);
+  setText('pp-current', s.current || '');
+
+  for (const r of (s.results || [])) {
+    if (_seen.has(r.id)) continue;
+    _seen.add(r.id);
+    setRowEstado(r.id, r.ok ? 'aplicado' : 'error');
+    const cb = document.querySelector(`[data-item-id="${r.id}"] .item-checkbox`);
+    if (cb) cb.disabled = true;
+    if (!r.ok) {
+      const badge = document.getElementById('badge-' + r.id);
+      if (badge) badge.title = r.msg;
+    }
+  }
+  refreshStats();
+}
+
+// ── Undo ──────────────────────────────────────────────────────────────────────
+async function deshacerPlan() {
+  const apl = parseInt(document.getElementById('stat-aplicados').textContent || '0');
+  if (!apl) { showToast('No hay movimientos aplicados que deshacer', 'warning'); return; }
+  if (!confirm(`¿Deshacer ${apl} movimiento(s)? Los archivos volverán a su ubicación original.`)) return;
+
+  const res = await fetch(`/api/plan/${PLAN_ID}/deshacer`, {method: 'POST'});
+  const data = await res.json();
+  showToast(data.message || 'Operación completada', data.failed ? 'warning' : 'success');
+  setTimeout(() => location.reload(), 1500);
+}
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+document.addEventListener('DOMContentLoaded', () => {
+  refreshStats();
+
+  // Reconnect to SSE if apply is already running (e.g., page reload during apply)
+  fetch(`/api/plan/${PLAN_ID}/progress`)
+    .then(() => {})
+    .catch(() => {});
+});
+</script>
+{% endblock %}

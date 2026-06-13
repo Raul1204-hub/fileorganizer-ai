@@ -133,6 +133,31 @@ def create_tables():
             dim             INTEGER NOT NULL DEFAULT 0,
             fecha_embedding TEXT
         );
+
+        CREATE TABLE IF NOT EXISTS planes (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            nombre          TEXT,
+            carpeta_raiz    TEXT NOT NULL,
+            estado          TEXT DEFAULT 'borrador',
+            fecha_creacion  TEXT,
+            fecha_aplicado  TEXT,
+            total_items     INTEGER DEFAULT 0,
+            items_aplicados INTEGER DEFAULT 0
+        );
+
+        CREATE TABLE IF NOT EXISTS plan_items (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            plan_id       INTEGER NOT NULL REFERENCES planes(id),
+            archivo_id    INTEGER REFERENCES archivos(id),
+            tipo          TEXT DEFAULT 'mover',
+            origen        TEXT NOT NULL,
+            destino       TEXT NOT NULL,
+            motivo        TEXT,
+            estado        TEXT DEFAULT 'aprobado',
+            mensaje_error TEXT,
+            backup_id     INTEGER,
+            orden         INTEGER DEFAULT 0
+        );
     """)
     for cat_id, nombre, color, icono in CATEGORIAS_SEED:
         cur.execute(
@@ -986,6 +1011,195 @@ def get_analytics_stats(categoria_id: int | None = None) -> dict:
         "duplicados_bytes": int(dup_bytes),
         "archivos_frios": cold_count,
     }
+
+
+# ── Plan de organización ──────────────────────────────────────────────────────
+
+
+def insert_plan(carpeta_raiz: str, nombre: str | None = None) -> int:
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT INTO planes (nombre, carpeta_raiz, fecha_creacion) VALUES (?, ?, ?)",
+        (nombre, str(carpeta_raiz), datetime.now().isoformat()),
+    )
+    plan_id = cur.lastrowid
+    conn.commit()
+    conn.close()
+    return plan_id
+
+
+def insert_plan_item(
+    plan_id: int,
+    archivo_id: int,
+    origen: str,
+    destino: str,
+    motivo: str | None = None,
+    orden: int = 0,
+) -> int:
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        """INSERT INTO plan_items
+           (plan_id, archivo_id, tipo, origen, destino, motivo, estado, orden)
+           VALUES (?, ?, 'mover', ?, ?, ?, 'aprobado', ?)""",
+        (plan_id, archivo_id, str(origen), str(destino), motivo, orden),
+    )
+    item_id = cur.lastrowid
+    conn.commit()
+    conn.close()
+    return item_id
+
+
+def update_plan_stats(plan_id: int) -> None:
+    """Recompute total_items and items_aplicados from plan_items."""
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT COUNT(*) AS n FROM plan_items WHERE plan_id = ?", (plan_id,))
+    total = cur.fetchone()["n"]
+    cur.execute(
+        "SELECT COUNT(*) AS n FROM plan_items WHERE plan_id = ? AND estado = 'aplicado'",
+        (plan_id,),
+    )
+    aplicados = cur.fetchone()["n"]
+    cur.execute(
+        "UPDATE planes SET total_items = ?, items_aplicados = ? WHERE id = ?",
+        (total, aplicados, plan_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_plan(plan_id: int) -> dict | None:
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM planes WHERE id = ?", (plan_id,))
+    row = cur.fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def get_plan_items(plan_id: int) -> list[dict]:
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        """SELECT pi.*, a.nombre AS archivo_nombre, a.tamaño_bytes,
+                  c.nombre AS cat_nombre, c.color AS cat_color, c.icono AS cat_icono
+           FROM plan_items pi
+           LEFT JOIN archivos a ON pi.archivo_id = a.id
+           LEFT JOIN categorias c ON a.categoria_id = c.id
+           WHERE pi.plan_id = ?
+           ORDER BY pi.orden""",
+        (plan_id,),
+    )
+    rows = cur.fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def get_plan_item(item_id: int) -> dict | None:
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM plan_items WHERE id = ?", (item_id,))
+    row = cur.fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def update_plan_item_estado(
+    item_id: int,
+    estado: str,
+    mensaje_error: str | None = None,
+    backup_id: int | None = None,
+) -> None:
+    conn = get_connection()
+    cur = conn.cursor()
+    sets = ["estado = ?"]
+    params: list = [estado]
+    if mensaje_error is not None:
+        sets.append("mensaje_error = ?")
+        params.append(mensaje_error)
+    if backup_id is not None:
+        sets.append("backup_id = ?")
+        params.append(backup_id)
+    params.append(item_id)
+    cur.execute(f"UPDATE plan_items SET {', '.join(sets)} WHERE id = ?", params)
+    conn.commit()
+    conn.close()
+
+
+def update_plan_item_destino(item_id: int, nuevo_destino: str) -> None:
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        "UPDATE plan_items SET destino = ? WHERE id = ?",
+        (str(nuevo_destino), item_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+def update_plan_items_estado_bulk(plan_id: int, item_ids: list[int], nuevo_estado: str) -> None:
+    if not item_ids:
+        return
+    conn = get_connection()
+    cur = conn.cursor()
+    placeholders = ",".join("?" * len(item_ids))
+    cur.execute(
+        f"UPDATE plan_items SET estado = ? WHERE id IN ({placeholders}) AND plan_id = ?",
+        [nuevo_estado, *item_ids, plan_id],
+    )
+    conn.commit()
+    conn.close()
+
+
+def update_plan_estado(plan_id: int, estado: str, fecha_aplicado: str | None = None) -> None:
+    conn = get_connection()
+    cur = conn.cursor()
+    if fecha_aplicado:
+        cur.execute(
+            "UPDATE planes SET estado = ?, fecha_aplicado = ? WHERE id = ?",
+            (estado, fecha_aplicado, plan_id),
+        )
+    else:
+        cur.execute("UPDATE planes SET estado = ? WHERE id = ?", (estado, plan_id))
+    conn.commit()
+    conn.close()
+
+
+def get_planes_recientes(limit: int = 20) -> list[dict]:
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM planes ORDER BY fecha_creacion DESC LIMIT ?", (limit,))
+    rows = cur.fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def get_all_etiquetas_grouped() -> dict[int, list[str]]:
+    """Return {archivo_id: [etiqueta, ...]} fetched in a single query."""
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT archivo_id, etiqueta FROM etiquetas ORDER BY archivo_id, id")
+    rows = cur.fetchall()
+    conn.close()
+    result: dict[int, list[str]] = {}
+    for row in rows:
+        result.setdefault(row["archivo_id"], []).append(row["etiqueta"])
+    return result
+
+
+def get_latest_backup_for_archivo(archivo_id: int) -> dict | None:
+    """Return the most recent backup_operaciones row for the given file."""
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT * FROM backup_operaciones WHERE archivo_id = ? ORDER BY fecha_operacion DESC LIMIT 1",
+        (archivo_id,),
+    )
+    row = cur.fetchone()
+    conn.close()
+    return dict(row) if row else None
 
 
 def descartar_recomendaciones_por_archivo_ids(archivo_ids: list[int]) -> None:

@@ -35,17 +35,17 @@ def propose_organization(files: list[dict]) -> list[dict]:
     return proposals
 
 
-def execute_move(archivo_id: int, ruta_origen: str, ruta_destino: str) -> bool:
-    """Write backup record then move the file. Returns True on success."""
+def execute_move(archivo_id: int, ruta_origen: str, ruta_destino: str) -> tuple[bool, str]:
+    """Write backup record then move the file. Returns (success, message)."""
     src = Path(ruta_origen)
     dst = Path(ruta_destino)
 
     if not src.exists():
-        return False
+        return False, f"Archivo no encontrado en disco: {src.name}"
 
     archivo = database.get_archivo(archivo_id)
     if not archivo:
-        return False
+        return False, "Archivo no encontrado en la base de datos"
 
     # Backup MUST be written before any filesystem change
     database.insert_backup_operacion(
@@ -61,9 +61,11 @@ def execute_move(archivo_id: int, ruta_origen: str, ruta_destino: str) -> bool:
         shutil.move(str(src), str(dst))
         database.update_archivo_ruta(archivo_id, ruta_destino)
         database.insert_historial(archivo_id, ruta_origen, ruta_destino, "mover")
-        return True
-    except (PermissionError, OSError):
-        return False
+        return True, "Movido correctamente"
+    except PermissionError as exc:
+        return False, f"Permiso denegado: {exc.strerror or exc}"
+    except OSError as exc:
+        return False, f"Error al mover: {exc}"
 
 
 def undo_operation(backup_id: int) -> tuple[bool, str]:
