@@ -138,6 +138,41 @@ def execute_delete_duplicate(archivo_id: int, backup_dir: Path) -> tuple[bool, s
         return False, f"Error al mover: {exc}"
 
 
+def execute_rename(archivo_id: int, nuevo_nombre: str) -> tuple[bool, str]:
+    """Rename a file in-place, writing a backup record first for undo support.
+
+    nuevo_nombre must be the final filename (collision already resolved by caller).
+    Returns (success, message).
+    """
+    archivo = database.get_archivo(archivo_id)
+    if not archivo:
+        return False, "Archivo no encontrado en la base de datos"
+
+    src = Path(archivo["ruta_actual"])
+    if not src.exists():
+        return False, f"Archivo no encontrado en disco: {src}"
+
+    dst = src.parent / nuevo_nombre
+    if dst.exists() and dst.resolve() != src.resolve():
+        return False, f"Ya existe un archivo con ese nombre: {nuevo_nombre}"
+
+    database.insert_backup_operacion(
+        archivo_id=archivo_id,
+        nombre_original=archivo["nombre"],
+        ruta_original=str(src),
+        ruta_nueva=str(dst),
+        operacion="renombrar",
+    )
+
+    try:
+        src.rename(dst)
+        database.update_archivo_nombre_y_ruta(archivo_id, nuevo_nombre, str(dst))
+        database.insert_historial(archivo_id, str(src), str(dst), "renombrar")
+        return True, f"Renombrado a: {nuevo_nombre}"
+    except (PermissionError, OSError) as exc:
+        return False, f"Error al renombrar: {exc}"
+
+
 def undo_all_pending() -> tuple[int, int]:
     """Revert every pending operation. Returns (success_count, fail_count)."""
     pending = database.get_backup_operaciones(solo_pendientes=True)

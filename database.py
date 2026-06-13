@@ -819,6 +819,37 @@ def get_grupos_duplicados() -> list[dict]:
     return grupos
 
 
+def get_archivos_analizados() -> list[dict]:
+    """Return all analyzed (resumen_ia present) existing files with category info."""
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        """SELECT a.id, a.nombre, a.ruta_actual, a.resumen_ia,
+                  a.tamaño_bytes, a.fecha_modificacion,
+                  c.nombre AS categoria_nombre, c.color AS categoria_color,
+                  c.icono AS categoria_icono
+           FROM archivos a
+           LEFT JOIN categorias c ON a.categoria_id = c.id
+           WHERE a.existe = 1 AND a.resumen_ia IS NOT NULL AND a.resumen_ia != ''
+           ORDER BY a.nombre"""
+    )
+    rows = cur.fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def update_archivo_nombre_y_ruta(archivo_id: int, nuevo_nombre: str, nueva_ruta: str) -> None:
+    """Update nombre and ruta_actual together after a rename."""
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        "UPDATE archivos SET nombre = ?, ruta_actual = ? WHERE id = ?",
+        (nuevo_nombre, str(nueva_ruta), archivo_id),
+    )
+    conn.commit()
+    conn.close()
+
+
 def descartar_recomendaciones_por_archivo_ids(archivo_ids: list[int]) -> None:
     """Discard all R1 (duplicate) recommendations for the given file IDs."""
     if not archivo_ids:

@@ -1,0 +1,384 @@
+{% extends "base.html" %}
+{% block title %}Renombrar — FileOrganizer AI{% endblock %}
+{% block page_title %}Renombrado inteligente{% endblock %}
+
+{% block content %}
+
+{% if total == 0 %}
+<!-- Empty state -->
+<div class="flex flex-col items-center justify-center py-24 gap-4">
+  <div class="w-16 h-16 rounded-2xl bg-sky-100 dark:bg-sky-950 flex items-center justify-center">
+    <i class="fa-solid fa-check text-3xl text-sky-500"></i>
+  </div>
+  <div class="text-center">
+    <p class="text-lg font-semibold text-gray-800 dark:text-gray-200">Sin candidatos detectados</p>
+    <p class="text-sm text-gray-400 mt-1">
+      Todos los archivos analizados ya tienen nombres descriptivos.
+    </p>
+    <p class="text-xs text-gray-400 mt-1">
+      Ejecuta un escaneo con análisis IA para detectar más candidatos.
+    </p>
+  </div>
+  <a href="/" class="mt-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white
+                      rounded-lg text-sm font-medium transition">
+    Ir al Dashboard
+  </a>
+</div>
+
+{% else %}
+
+<!-- Header + controls -->
+<div class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-5">
+  <div>
+    <h1 class="text-2xl font-bold text-gray-900 dark:text-white flex items-center gap-2">
+      <i class="fa-solid fa-pen-to-square text-sky-500"></i>
+      Renombrado inteligente
+    </h1>
+    <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+      <span class="font-semibold text-sky-500">{{ total }}</span>
+      archivo(s) con nombres poco descriptivos — selecciona y genera sugerencias con IA
+    </p>
+  </div>
+  <div class="flex items-center gap-2 flex-wrap">
+    <button id="btn-generar" onclick="generarSugerencias()"
+            class="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700
+                   active:bg-indigo-800 text-white rounded-lg text-sm font-medium transition shadow-sm">
+      <i class="fa-solid fa-wand-magic-sparkles"></i> Generar sugerencias
+    </button>
+    <button id="btn-aplicar" onclick="abrirModalAplicar()" disabled
+            class="flex items-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-700
+                   active:bg-emerald-800 text-white rounded-lg text-sm font-medium transition shadow-sm
+                   disabled:opacity-40 disabled:cursor-not-allowed">
+      <i class="fa-solid fa-check-double"></i> Aplicar seleccionados
+    </button>
+  </div>
+</div>
+
+<!-- Generation progress (hidden by default) -->
+<div id="gen-progress"
+     class="hidden bg-white dark:bg-gray-900 rounded-xl border border-gray-200
+            dark:border-gray-800 shadow-sm px-4 py-3 mb-4">
+  <div class="flex items-center gap-3 text-sm text-gray-600 dark:text-gray-400 mb-2">
+    <i class="fa-solid fa-spinner fa-spin text-indigo-500"></i>
+    <span id="gen-progress-text">Generando sugerencias…</span>
+    <span id="gen-progress-count" class="ml-auto text-xs text-gray-400"></span>
+  </div>
+  <div class="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-1.5 overflow-hidden">
+    <div id="gen-progress-bar"
+         class="h-full bg-indigo-500 rounded-full transition-all duration-300"
+         style="width: 0%"></div>
+  </div>
+</div>
+
+<!-- Table card -->
+<div class="bg-white dark:bg-gray-900 rounded-xl border border-gray-200
+            dark:border-gray-800 shadow-sm overflow-hidden">
+
+  <!-- Table header -->
+  <div class="flex items-center gap-3 px-4 py-3 border-b border-gray-200
+              dark:border-gray-800 bg-gray-50 dark:bg-gray-800/50 text-xs
+              font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">
+    <label class="flex items-center cursor-pointer">
+      <input type="checkbox" id="select-all" onchange="toggleSelectAll(this.checked)"
+             class="accent-indigo-600 cursor-pointer">
+    </label>
+    <span class="w-5/12">Archivo actual</span>
+    <span class="w-2/12 hidden sm:block">Categoría</span>
+    <span class="w-4/12">Nombre sugerido</span>
+    <span class="flex-1 hidden lg:block">Resumen</span>
+  </div>
+
+  <!-- Table rows -->
+  <div class="divide-y divide-gray-100 dark:divide-gray-800" id="candidatos-body">
+    {% for a in candidatos %}
+    <div id="row-{{ a.id }}"
+         class="flex items-start gap-3 px-4 py-3 hover:bg-gray-50
+                dark:hover:bg-gray-800/40 transition-colors">
+      <!-- Checkbox -->
+      <label class="flex items-center mt-0.5 cursor-pointer flex-shrink-0">
+        <input type="checkbox" class="row-check accent-indigo-600 cursor-pointer"
+               data-id="{{ a.id }}" onchange="onCheckChange()">
+      </label>
+
+      <!-- Nombre actual -->
+      <div class="w-5/12 min-w-0">
+        <div class="flex items-center gap-1.5 text-sm font-medium text-gray-900
+                    dark:text-white truncate" title="{{ a.nombre }}">
+          <span>{{ a.categoria_icono or '📄' }}</span>
+          <span class="truncate">{{ a.nombre }}</span>
+        </div>
+        <div class="text-xs text-gray-400 truncate mt-0.5"
+             title="{{ a.ruta_actual }}">{{ a.ruta_actual }}</div>
+      </div>
+
+      <!-- Category -->
+      <div class="w-2/12 hidden sm:block">
+        {% if a.categoria_color %}
+        <span class="badge text-xs font-medium px-2 py-0.5 rounded-full"
+              style="background:{{ a.categoria_color }}22; color:{{ a.categoria_color }}">
+          {{ a.categoria_nombre or '—' }}
+        </span>
+        {% else %}
+        <span class="text-xs text-gray-400">—</span>
+        {% endif %}
+      </div>
+
+      <!-- Nombre sugerido (editable) -->
+      <div class="w-4/12 min-w-0">
+        <input type="text" id="sugerido-{{ a.id }}"
+               data-ext="{{ a.nombre.rsplit('.', 1)[-1] if '.' in a.nombre else '' }}"
+               placeholder="Haz clic en Generar…"
+               oninput="onSugeridoChange()"
+               class="w-full px-2.5 py-1.5 text-sm rounded-lg border border-gray-200
+                      dark:border-gray-700 bg-gray-50 dark:bg-gray-800
+                      text-gray-900 dark:text-gray-100 placeholder:text-gray-400
+                      focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500
+                      focus:outline-none transition">
+        <div id="estado-{{ a.id }}" class="text-xs mt-0.5 h-3.5"></div>
+      </div>
+
+      <!-- Resumen (desktop only) -->
+      <div class="flex-1 hidden lg:block text-xs text-gray-400 dark:text-gray-500
+                  line-clamp-2 leading-relaxed" title="{{ a.resumen_ia or '' }}">
+        {{ (a.resumen_ia or '')[:120] }}{% if a.resumen_ia and a.resumen_ia|length > 120 %}…{% endif %}
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+
+{% endif %}
+
+<!-- Confirmation modal -->
+<div id="modal-overlay"
+     class="hidden fixed inset-0 z-50 flex items-center justify-center p-4
+            bg-black/50 backdrop-blur-sm">
+  <div class="bg-white dark:bg-gray-900 rounded-2xl shadow-2xl max-w-md w-full
+              border border-gray-200 dark:border-gray-800 p-6">
+    <div class="flex items-center gap-3 mb-4">
+      <div class="w-10 h-10 rounded-full bg-emerald-100 dark:bg-emerald-950
+                  flex items-center justify-center flex-shrink-0">
+        <i class="fa-solid fa-pen-to-square text-emerald-500"></i>
+      </div>
+      <div>
+        <h3 class="font-semibold text-gray-900 dark:text-white">Confirmar renombrado</h3>
+        <p class="text-xs text-gray-400">Esta acción se puede deshacer desde Backup &amp; Undo</p>
+      </div>
+    </div>
+    <p id="modal-summary"
+       class="text-sm text-gray-700 dark:text-gray-300 mb-6 leading-relaxed
+              bg-gray-50 dark:bg-gray-800 rounded-lg px-4 py-3"></p>
+    <div id="modal-preview" class="hidden mb-4 max-h-48 overflow-y-auto space-y-1"></div>
+    <div class="flex gap-3">
+      <button onclick="cerrarModal()"
+              class="flex-1 px-4 py-2 rounded-lg border border-gray-200 dark:border-gray-700
+                     text-sm font-medium text-gray-700 dark:text-gray-300
+                     hover:bg-gray-50 dark:hover:bg-gray-800 transition">
+        Cancelar
+      </button>
+      <button onclick="confirmarAplicar()" id="btn-confirmar"
+              class="flex-1 px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700
+                     text-white text-sm font-medium transition
+                     flex items-center justify-center gap-2">
+        <i class="fa-solid fa-check"></i> Confirmar
+      </button>
+    </div>
+  </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+let _pendingItems = [];
+
+// ── Selection helpers ─────────────────────────────────────────────────────────
+function getCheckedIds() {
+  return [...document.querySelectorAll('.row-check:checked')].map(el => parseInt(el.dataset.id));
+}
+
+function toggleSelectAll(checked) {
+  document.querySelectorAll('.row-check').forEach(el => { el.checked = checked; });
+  onCheckChange();
+}
+
+function onCheckChange() {
+  const allChecks = document.querySelectorAll('.row-check');
+  const checkedCount = document.querySelectorAll('.row-check:checked').length;
+  const selAll = document.getElementById('select-all');
+  if (selAll) {
+    selAll.indeterminate = checkedCount > 0 && checkedCount < allChecks.length;
+    selAll.checked = checkedCount === allChecks.length && allChecks.length > 0;
+  }
+  refreshApplyBtn();
+}
+
+function refreshApplyBtn() {
+  const ids = getCheckedIds();
+  const hasValue = ids.some(id => {
+    const inp = document.getElementById('sugerido-' + id);
+    return inp && inp.value.trim();
+  });
+  document.getElementById('btn-aplicar').disabled = !hasValue;
+}
+
+function onSugeridoChange() { refreshApplyBtn(); }
+
+// ── Progress helpers ──────────────────────────────────────────────────────────
+function showProgress(done, total, nombre) {
+  const box = document.getElementById('gen-progress');
+  box.classList.remove('hidden');
+  const pct = total > 0 ? Math.round((done / total) * 100) : 0;
+  document.getElementById('gen-progress-bar').style.width = pct + '%';
+  document.getElementById('gen-progress-count').textContent = done + '/' + total;
+  document.getElementById('gen-progress-text').textContent =
+    nombre ? 'Procesando: ' + nombre : 'Generando sugerencias…';
+}
+
+function hideProgress() {
+  document.getElementById('gen-progress').classList.add('hidden');
+}
+
+function setRowEstado(aid, msg, type) {
+  const el = document.getElementById('estado-' + aid);
+  if (!el) return;
+  const colors = { ok: 'text-emerald-500', error: 'text-rose-500', loading: 'text-indigo-400' };
+  el.className = 'text-xs mt-0.5 h-3.5 ' + (colors[type] || 'text-gray-400');
+  el.textContent = msg;
+}
+
+// ── Generate suggestions ──────────────────────────────────────────────────────
+async function generarSugerencias() {
+  const ids = getCheckedIds();
+  if (ids.length === 0) {
+    showToast('Selecciona al menos un archivo', 'warning');
+    return;
+  }
+
+  const btn = document.getElementById('btn-generar');
+  btn.disabled = true;
+  btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Generando…';
+  let done = 0;
+
+  for (const aid of ids) {
+    const row = document.getElementById('row-' + aid);
+    const nombre = row ? row.querySelector('.truncate')?.textContent?.trim() : String(aid);
+    showProgress(done, ids.length, nombre);
+    setRowEstado(aid, 'consultando IA…', 'loading');
+
+    try {
+      const res = await fetch('/api/renombrado/sugerir', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ archivo_ids: [aid] }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setRowEstado(aid, data.error || 'error de servidor', 'error');
+      } else {
+        const item = Array.isArray(data) ? data[0] : data;
+        if (item?.nombre_sugerido) {
+          const inp = document.getElementById('sugerido-' + aid);
+          if (inp) inp.value = item.nombre_sugerido;
+          setRowEstado(aid, '✓ sugerencia lista', 'ok');
+        } else {
+          setRowEstado(aid, item?.error || 'sin sugerencia', 'error');
+        }
+      }
+    } catch (e) {
+      setRowEstado(aid, 'error de red', 'error');
+    }
+    done++;
+  }
+
+  showProgress(done, ids.length, '');
+  hideProgress();
+  refreshApplyBtn();
+  showToast('Sugerencias generadas para ' + done + ' archivo(s)', 'success');
+  btn.disabled = false;
+  btn.innerHTML = '<i class="fa-solid fa-wand-magic-sparkles"></i> Generar sugerencias';
+}
+
+// ── Apply renames ─────────────────────────────────────────────────────────────
+function abrirModalAplicar() {
+  const ids = getCheckedIds();
+  const items = ids
+    .map(aid => {
+      const inp = document.getElementById('sugerido-' + aid);
+      const nombre = inp ? inp.value.trim() : '';
+      const row = document.getElementById('row-' + aid);
+      const actual = row
+        ? row.querySelector('.font-medium.text-gray-900, .font-medium.dark\\:text-white')
+            ?.querySelector('.truncate')?.textContent?.trim()
+        : '';
+      return nombre ? { archivo_id: aid, nuevo_nombre: nombre, actual } : null;
+    })
+    .filter(Boolean);
+
+  if (items.length === 0) {
+    showToast('Genera sugerencias para los archivos seleccionados primero', 'warning');
+    return;
+  }
+
+  _pendingItems = items;
+  document.getElementById('modal-summary').textContent =
+    'Se renombrarán ' + items.length + ' archivo(s). Los nombres anteriores quedan guardados en Backup & Undo.';
+
+  // Preview list (up to 6)
+  const preview = document.getElementById('modal-preview');
+  const shown = items.slice(0, 6);
+  preview.innerHTML = shown
+    .map(it =>
+      '<div class="text-xs bg-gray-50 dark:bg-gray-800 rounded px-3 py-1.5">' +
+      '<span class="text-gray-500 line-through truncate block">' + (it.actual || '…') + '</span>' +
+      '<span class="text-emerald-600 dark:text-emerald-400 font-medium truncate block">→ ' +
+      it.nuevo_nombre + '</span></div>'
+    )
+    .join('');
+  if (items.length > 6) {
+    preview.innerHTML +=
+      '<div class="text-xs text-gray-400 text-center py-1">… y ' +
+      (items.length - 6) + ' más</div>';
+  }
+  preview.classList.remove('hidden');
+  document.getElementById('modal-overlay').classList.remove('hidden');
+}
+
+function cerrarModal() {
+  document.getElementById('modal-overlay').classList.add('hidden');
+  document.getElementById('modal-preview').classList.add('hidden');
+  _pendingItems = [];
+}
+
+async function confirmarAplicar() {
+  const btn = document.getElementById('btn-confirmar');
+  btn.disabled = true;
+  btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Renombrando…';
+
+  try {
+    const res = await fetch('/api/renombrado/aplicar', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ items: _pendingItems }),
+    });
+    const data = await res.json();
+    cerrarModal();
+    if (data.ok > 0) {
+      showToast(data.ok + ' archivo(s) renombrado(s) correctamente', 'success');
+    }
+    if (data.failed > 0) {
+      showToast(data.failed + ' error(es): ' + (data.errores || []).join('; '), 'error');
+    }
+    setTimeout(() => location.reload(), 1500);
+  } catch (e) {
+    showToast('Error de red al aplicar renombrado', 'error');
+    btn.disabled = false;
+    btn.innerHTML = '<i class="fa-solid fa-check"></i> Confirmar';
+  }
+}
+
+document.getElementById('modal-overlay').addEventListener('click', function (e) {
+  if (e.target === this) cerrarModal();
+});
+</script>
+{% endblock %}

@@ -24,9 +24,10 @@ import database
 import embeddings as _embed_module
 import organizer
 import recommendations
+import renamer
 import scanner
 import watcher as _watcher_module
-from config import EMBED_MODEL, VISION_MAX_MB, VISION_MODEL
+from config import ANALYSIS_MODEL, EMBED_MODEL, VISION_MAX_MB, VISION_MODEL
 
 app = Flask(__name__, template_folder="templates")
 app.secret_key = "fileorganizer-ai-secret-2024"
@@ -774,6 +775,107 @@ def api_eliminar_duplicados():
             "failed": fail_count,
             "errores": errores[:5],
             "message": f"{ok_count} archivo(s) movidos al backup. {fail_count} error(es).",
+        }
+    )
+
+
+# ── Renombrado inteligente ────────────────────────────────────────────────────
+
+
+@app.route("/renombrar")
+def renombrar():
+    candidatos = renamer.get_candidatos()
+    return render_template("renombrar.html", candidatos=candidatos, total=len(candidatos))
+
+
+@app.route("/api/renombrado/candidatos")
+def api_candidatos_renombrado():
+    return jsonify(renamer.get_candidatos())
+
+
+@app.route("/api/renombrado/sugerir", methods=["POST"])
+def api_sugerir_nombres():
+    status = ollama_client.check_ollama([ANALYSIS_MODEL])
+    if not status["running"]:
+        return jsonify({"error": "Ollama no está disponible"}), 503
+    if status["missing"]:
+        return jsonify({"error": f"Modelo {ANALYSIS_MODEL} no instalado"}), 503
+
+    data = request.get_json() or {}
+    archivo_ids = []
+    for i in data.get("archivo_ids", []):
+        try:
+            archivo_ids.append(int(i))
+        except (TypeError, ValueError):
+            pass
+    if not archivo_ids:
+        return jsonify({"error": "Sin archivos"}), 400
+
+    results = []
+    for aid in archivo_ids:
+        archivo = database.get_archivo(aid)
+        if not archivo:
+            results.append({"archivo_id": aid, "error": "No encontrado"})
+            continue
+        archivo["etiquetas"] = database.get_etiquetas_by_archivo(aid)
+        nombre_sugerido = renamer.sugerir_nombre(archivo)
+        if nombre_sugerido:
+            results.append({"archivo_id": aid, "nombre_sugerido": nombre_sugerido})
+        else:
+            results.append({"archivo_id": aid, "error": "Sin sugerencia"})
+    return jsonify(results)
+
+
+@app.route("/api/renombrado/aplicar", methods=["POST"])
+def api_aplicar_renombrado():
+    data = request.get_json() or {}
+    items = data.get("items", [])
+
+    ok_count = fail_count = 0
+    errores: list[str] = []
+
+    for item in items:
+        try:
+            aid = int(item["archivo_id"])
+        except (TypeError, ValueError, KeyError):
+            continue
+        raw_nombre = str(item.get("nuevo_nombre", "")).strip()
+        if not raw_nombre:
+            continue
+
+        archivo = database.get_archivo(aid)
+        if not archivo:
+            fail_count += 1
+            errores.append(f"ID {aid}: no encontrado")
+            continue
+
+        # Re-sanitize user input (may have been manually edited)
+        ext = Path(raw_nombre).suffix or Path(archivo["nombre"]).suffix.lower()
+        nuevo_nombre = renamer.sanitizar_nombre(Path(raw_nombre).stem, ext)
+
+        # Collision resolution
+        src = Path(archivo["ruta_actual"])
+        dst = src.parent / nuevo_nombre
+        if dst.exists() and dst.resolve() != src.resolve():
+            stem, suf, n = Path(nuevo_nombre).stem, Path(nuevo_nombre).suffix, 2
+            while dst.exists():
+                dst = src.parent / f"{stem}-{n}{suf}"
+                n += 1
+            nuevo_nombre = dst.name
+
+        success, msg = organizer.execute_rename(aid, nuevo_nombre)
+        if success:
+            ok_count += 1
+        else:
+            fail_count += 1
+            errores.append(msg)
+
+    return jsonify(
+        {
+            "ok": ok_count,
+            "failed": fail_count,
+            "errores": errores[:5],
+            "message": f"{ok_count} archivo(s) renombrado(s). {fail_count} error(es).",
         }
     )
 
