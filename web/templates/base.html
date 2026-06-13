@@ -534,6 +534,7 @@
   let _prevFase = 'idle';
   let _sseSource = null;
   let _scanDetailOpen = false;
+  let _allLogLines = [];   // client-side accumulator — never cleared mid-scan
 
   function toggleScanDetail() {
     _scanDetailOpen = !_scanDetailOpen;
@@ -544,6 +545,11 @@
       detail.classList.remove('hidden');
       icon.classList.replace('fa-chevron-up', 'fa-chevron-down');
       label.textContent = 'Contraer';
+      // Render any accumulated lines that weren't rendered while collapsed
+      const list = document.getElementById('sp-log-list');
+      list.innerHTML = '';
+      _allLogLines.forEach(e => _appendLogRow(list, e));
+      list.scrollTop = list.scrollHeight;
     } else {
       detail.classList.add('hidden');
       icon.classList.replace('fa-chevron-down', 'fa-chevron-up');
@@ -551,30 +557,31 @@
     }
   }
 
-  let _lastLogMsg = '';  // fingerprint of last rendered line to avoid duplicates
+  function _appendLogRow(list, entry) {
+    const div = document.createElement('div');
+    div.className = 'sp-log-' + (entry.level || 'info');
+    const icon = entry.level === 'ok' ? '✔' : entry.level === 'warn' ? '⚠' : entry.level === 'error' ? '✖' : '▸';
+    div.innerHTML = `<span style="color:var(--text-3)">[${entry.ts}]</span> ${icon} ${_escHtml(entry.msg)}`;
+    list.appendChild(div);
+  }
 
   function _renderLogLines(lines) {
-    if (!_scanDetailOpen || !lines || lines.length === 0) return;
-    const list = document.getElementById('sp-log-list');
-    // Find which lines are new since our last render
-    // The server sends up to last-50; we use a msg fingerprint to skip already-rendered ones
+    if (!lines || lines.length === 0) return;
+    // Find new lines not yet in _allLogLines
     let startIdx = 0;
-    if (_lastLogMsg) {
+    if (_allLogLines.length > 0) {
+      const lastKey = _allLogLines[_allLogLines.length - 1]._k;
       for (let i = lines.length - 1; i >= 0; i--) {
-        if ((lines[i].ts + lines[i].msg) === _lastLogMsg) { startIdx = i + 1; break; }
+        if ((lines[i].ts + lines[i].msg) === lastKey) { startIdx = i + 1; break; }
       }
     }
     const newLines = lines.slice(startIdx);
     if (newLines.length === 0) return;
-    newLines.forEach(entry => {
-      const div = document.createElement('div');
-      div.className = 'sp-log-' + (entry.level || 'info');
-      const icon = entry.level === 'ok' ? '✔' : entry.level === 'warn' ? '⚠' : entry.level === 'error' ? '✖' : '▸';
-      div.innerHTML = `<span style="color:var(--text-3)">[${entry.ts}]</span> ${icon} ${_escHtml(entry.msg)}`;
-      list.appendChild(div);
-    });
-    _lastLogMsg = lines[lines.length - 1].ts + lines[lines.length - 1].msg;
-    // Auto-scroll to bottom
+    newLines.forEach(e => _allLogLines.push({...e, _k: e.ts + e.msg}));
+    // Only update DOM if detail panel is open
+    if (!_scanDetailOpen) return;
+    const list = document.getElementById('sp-log-list');
+    newLines.forEach(e => _appendLogRow(list, e));
     list.scrollTop = list.scrollHeight;
   }
 
@@ -663,10 +670,12 @@
   }
 
   function notifyScanStarted() {
-    // Reset log tracking for fresh scan
-    _lastLogMsg = '';
+    // Reset log accumulator for fresh scan
+    _allLogLines = [];
     const list = document.getElementById('sp-log-list');
     if (list) list.innerHTML = '';
+    // Auto-expand detail panel so the user sees log entries immediately
+    if (!_scanDetailOpen) toggleScanDetail();
     _applyState({ running: true, fase: 'escaneando', hechos: 0, total: 0,
                   archivo_actual: '', eta_segundos: -1, summary: {},
                   log_lines: [], stats_detail: {}, speed_per_min: 0 });

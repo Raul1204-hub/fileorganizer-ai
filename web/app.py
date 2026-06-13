@@ -479,6 +479,10 @@ def _run_scan(target_path: str):
             f"Reconciliación: {len(new_files):,} nuevos · {len(modified):,} modificados"
             f" · {len(unchanged):,} sin cambios · {len(disappeared_ids):,} desaparecidos",
         )
+        # Count how many of the new/modified files are analyzable docs/images
+        _doc_count = sum(1 for f in [*new_files, *modified] if f["extension"] in scanner.DOC_EXTS or f["extension"] in scanner.IMG_EXTS)
+        if _doc_count > 0:
+            _log_scan("info", f"→ {_doc_count:,} archivo(s) de documento/imagen serán enviados a análisis IA")
         with _lock:
             _ss.stats_detail = {
                 "nuevos": len(new_files),
@@ -634,16 +638,20 @@ def _run_scan(target_path: str):
         if not _embed_available:
             _wlog.warning("embed model '%s' not available — embeddings skipped this scan", EMBED_MODEL)
 
-        _log_scan(
-            "info",
-            f"Análisis IA: {len(to_analyze):,} archivos en cola"
-            + (f" · modelo embed no disponible" if not _embed_available else ""),
-        )
+        n_to_analyze = len(to_analyze)
+        if n_to_analyze == 0:
+            _log_scan("ok", "Nada nuevo para analizar · todos los archivos ya estaban indexados o en caché")
+        else:
+            _log_scan(
+                "info",
+                f"Análisis IA: {n_to_analyze:,} archivo(s) en cola"
+                + (f" · embed no disponible" if not _embed_available else ""),
+            )
 
         with _lock:
             _ss.fase = "analizando"
             _ss.hechos = 0
-            _ss.total = len(to_analyze)
+            _ss.total = n_to_analyze
             _ss.archivo_actual = ""
             _ss.eta_segundos = -1.0
             _ss.t_inicio_fase = time.monotonic()
@@ -655,11 +663,14 @@ def _run_scan(target_path: str):
                 elif reason == "ollama":
                     _ss.fallos_ollama += 1
 
-        for ruta, aid in to_analyze.items():
+        for _anal_idx, (ruta, aid) in enumerate(to_analyze.items(), 1):
             if _ss.cancelled:
                 break
+            fname = Path(ruta).name
             with _lock:
-                _ss.archivo_actual = Path(ruta).name
+                _ss.archivo_actual = f"[{_anal_idx}/{n_to_analyze}] {fname}"
+
+            _log_scan("info", f"[{_anal_idx}/{n_to_analyze}] Analizando: {fname}")
 
             t0 = time.monotonic()
             result = analyzer.analyze_file(Path(ruta), Path(ruta).suffix.lower(), on_failure=_on_failure)
@@ -678,19 +689,23 @@ def _run_scan(target_path: str):
                     _ss.avg_chars = (_ss.avg_chars * n + text_len) / (n + 1)
                     _ss.ema_anal_n = n + 1
                 remaining = _ss.total - _ss.hechos
-                if _ss.ema_anal_n > 0 and remaining > 0:
+                phase_elapsed = time.monotonic() - _ss.t_inicio_fase
+                # ETA: EMA-based when stable (≥2 docs), wall-clock average otherwise
+                if _ss.ema_anal_n >= 2 and remaining > 0:
                     _ss.eta_segundos = _ss.ema_anal_spc * _ss.avg_chars * remaining
+                elif _ss.hechos > 0 and remaining > 0:
+                    _ss.eta_segundos = (phase_elapsed / _ss.hechos) * remaining
                 elif remaining == 0:
                     _ss.eta_segundos = 0.0
-                # Update speed
-                phase_elapsed = time.monotonic() - _ss.t_inicio_fase
                 if phase_elapsed > 0:
                     _ss.speed_per_min = (_ss.hechos / phase_elapsed) * 60
 
             if result:
-                _log_scan("ok", f"Analizado: {Path(ruta).name} ({elapsed:.1f}s · {text_len:,} chars)")
+                cat = result.get("categoria", "?")
+                via_str = f" · {texto_via}" if texto_via else ""
+                _log_scan("ok", f"[{_anal_idx}/{n_to_analyze}] ✓ {fname} → {cat}{via_str} ({elapsed:.1f}s)")
             else:
-                _log_scan("warn", f"Sin resultado: {Path(ruta).name}")
+                _log_scan("warn", f"[{_anal_idx}/{n_to_analyze}] ✗ Sin resultado: {fname} ({elapsed:.1f}s)")
 
             if result:
                 cat_id = scanner.CATEGORIA_IDS.get(result.get("categoria", ""), None)
