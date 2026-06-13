@@ -1,0 +1,674 @@
+{% extends "base.html" %}
+{% block title %}Registros — FileOrganizer AI{% endblock %}
+{% block page_title %}Registros del sistema{% endblock %}
+
+{% block scripts %}
+<style>
+  /* ── Full-screen overlay (same approach as chat.html) ───────────────── */
+  #logs-root {
+    position: fixed;
+    inset: 56px 0 0 240px; /* below header, right of sidebar */
+    display: flex;
+    z-index: 20;
+    background: var(--bg);
+  }
+
+  /* ── Left sidebar ──────────────────────────────────────────────────── */
+  #logs-sidebar {
+    width: 280px;
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    background: #1A1A1A;
+    border-right: 1px solid rgba(255,255,255,0.07);
+    overflow: hidden;
+  }
+
+  #logs-sidebar-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 14px 10px;
+    border-bottom: 1px solid rgba(255,255,255,0.07);
+    flex-shrink: 0;
+  }
+  #logs-sidebar-header h2 {
+    font-size: 13px; font-weight: 700;
+    color: #D4D4D4; letter-spacing: 0.01em; margin: 0;
+  }
+
+  #logs-list {
+    flex: 1;
+    overflow-y: auto;
+    padding: 6px 8px;
+  }
+
+  /* Date group label */
+  .logs-date-label {
+    font-size: 10px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: 0.08em;
+    color: #5A5A5A;
+    padding: 10px 8px 4px;
+  }
+
+  /* Execution item */
+  .logs-exec-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: background 0.12s;
+    position: relative;
+  }
+  .logs-exec-item:hover { background: rgba(255,255,255,0.06); }
+  .logs-exec-item.active { background: rgba(99,102,241,0.18); }
+
+  .logs-exec-icon {
+    width: 30px; height: 30px;
+    border-radius: 8px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 13px; flex-shrink: 0;
+  }
+
+  .logs-exec-body { flex: 1; min-width: 0; }
+  .logs-exec-title {
+    font-size: 12px; font-weight: 500;
+    color: #C8C8C8; white-space: nowrap;
+    overflow: hidden; text-overflow: ellipsis;
+  }
+  .logs-exec-meta {
+    font-size: 10px; color: #6B6B6B;
+    display: flex; align-items: center; gap: 5px; margin-top: 2px;
+  }
+
+  .logs-exec-dot-btn {
+    opacity: 0;
+    background: none; border: none;
+    color: #7A7A7A; cursor: pointer;
+    padding: 2px 4px; border-radius: 4px;
+    transition: all 0.12s; font-size: 12px; flex-shrink: 0;
+  }
+  .logs-exec-item:hover .logs-exec-dot-btn { opacity: 1; }
+  .logs-exec-dot-btn:hover { background: rgba(255,255,255,0.1); color: #D4D4D4; }
+
+  /* Status badges */
+  .badge-completado { color: #10B981; }
+  .badge-en_progreso { color: #F59E0B; }
+  .badge-cancelado { color: #9D9D9D; }
+  .badge-error { color: #EF4444; }
+
+  /* ── Settings section at bottom ────────────────────────────────────── */
+  #logs-settings {
+    flex-shrink: 0;
+    padding: 12px 14px;
+    border-top: 1px solid rgba(255,255,255,0.07);
+    background: rgba(0,0,0,0.2);
+  }
+  #logs-settings label {
+    display: block;
+    font-size: 10px; font-weight: 600; text-transform: uppercase;
+    letter-spacing: 0.06em; color: #5A5A5A; margin-bottom: 8px;
+  }
+  #logs-settings-row {
+    display: flex; align-items: center; gap: 6px;
+  }
+  #logs-retencion-select {
+    flex: 1;
+    background: #2D2D2D; color: #C8C8C8;
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 6px; padding: 5px 8px;
+    font-size: 12px; outline: none;
+  }
+  #logs-purge-btn {
+    font-size: 11px; padding: 5px 10px;
+    background: rgba(239,68,68,0.12); color: #EF4444;
+    border: 1px solid rgba(239,68,68,0.25);
+    border-radius: 6px; cursor: pointer; white-space: nowrap;
+    transition: all 0.15s;
+  }
+  #logs-purge-btn:hover { background: rgba(239,68,68,0.22); }
+
+  /* ── Right panel ───────────────────────────────────────────────────── */
+  #logs-detail {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    background: var(--bg);
+  }
+
+  /* Empty state */
+  #logs-empty {
+    flex: 1;
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    color: var(--text-3); text-align: center;
+    padding: 40px;
+  }
+  #logs-empty i { opacity: 0.3; }
+  #logs-empty p { font-size: 13px; margin-top: 12px; }
+
+  /* Execution detail view */
+  #logs-exec-view {
+    flex: 1; display: flex; flex-direction: column; overflow: hidden;
+  }
+
+  /* Header */
+  #logs-exec-hdr {
+    padding: 20px 24px 16px;
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+    background: var(--surface);
+  }
+  #logs-exec-hdr-top {
+    display: flex; align-items: flex-start; gap: 14px;
+  }
+  #logs-exec-hdr-icon {
+    width: 40px; height: 40px;
+    border-radius: 10px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 17px; flex-shrink: 0;
+  }
+  #logs-exec-hdr-body { flex: 1; min-width: 0; }
+  #logs-exec-hdr-title {
+    font-size: 14px; font-weight: 700;
+    color: var(--text-1);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  #logs-exec-hdr-sub {
+    display: flex; align-items: center; gap: 10px;
+    margin-top: 4px; flex-wrap: wrap;
+    font-size: 11.5px; color: var(--text-3);
+  }
+  .exec-status-pill {
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 2px 8px; border-radius: 99px;
+    font-size: 10.5px; font-weight: 600;
+  }
+
+  /* Stats strip */
+  #logs-exec-stats {
+    display: flex; flex-wrap: wrap; gap: 6px 20px;
+    padding: 12px 24px;
+    font-size: 12px; color: var(--text-2);
+    border-bottom: 1px solid var(--border-soft);
+    background: var(--surface);
+    flex-shrink: 0;
+  }
+  #logs-exec-stats strong { color: var(--text-1); font-weight: 700; }
+
+  /* Log entries */
+  #logs-entries-wrap {
+    flex: 1; overflow-y: auto;
+    padding: 12px 16px;
+  }
+  .log-entry {
+    display: flex; align-items: baseline; gap: 8px;
+    padding: 3px 0;
+    font-size: 11.5px;
+    font-family: 'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
+    line-height: 1.55;
+    border-bottom: 1px solid var(--border-soft);
+  }
+  .log-entry:last-child { border-bottom: none; }
+  .log-ts { color: var(--text-3); flex-shrink: 0; font-size: 10.5px; }
+  .log-lvl { flex-shrink: 0; font-size: 11px; }
+  .log-msg { color: var(--text-1); word-break: break-word; }
+  .log-entry.log-info .log-lvl { color: var(--text-3); }
+  .log-entry.log-ok   .log-lvl { color: #10B981; }
+  .log-entry.log-ok   .log-msg { color: var(--text-1); }
+  .log-entry.log-warn .log-lvl { color: #F59E0B; }
+  .log-entry.log-warn .log-msg { color: #D97706; }
+  .log-entry.log-error .log-lvl { color: #EF4444; }
+  .log-entry.log-error .log-msg { color: #EF4444; }
+
+  /* Live indicator */
+  .live-badge {
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 2px 7px; border-radius: 99px;
+    background: rgba(245,158,11,0.15); color: #F59E0B;
+    font-size: 10px; font-weight: 700;
+    animation: pulse-border 1.5s ease-in-out infinite;
+  }
+  @keyframes pulse-border {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.6; }
+  }
+
+  /* Context menu */
+  .logs-ctx-menu {
+    position: fixed; z-index: 9999;
+    background: #252526; border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 10px; box-shadow: 0 8px 32px rgba(0,0,0,0.45);
+    padding: 6px; min-width: 140px;
+  }
+  .logs-ctx-menu button {
+    display: flex; align-items: center; gap: 8px;
+    width: 100%; padding: 7px 12px;
+    background: none; border: none;
+    border-radius: 6px; font-size: 12.5px;
+    color: #D4D4D4; cursor: pointer; transition: background 0.1s;
+    text-align: left;
+  }
+  .logs-ctx-menu button:hover { background: rgba(255,255,255,0.08); }
+  .logs-ctx-menu button.danger { color: #EF4444; }
+
+  /* Empty entries */
+  #logs-no-entries {
+    text-align: center; padding: 40px;
+    color: var(--text-3); font-size: 13px;
+  }
+</style>
+
+<div id="logs-root">
+  <!-- ── LEFT SIDEBAR ──────────────────────────────────────────────────────── -->
+  <div id="logs-sidebar">
+    <div id="logs-sidebar-header">
+      <h2><i class="fa-solid fa-terminal mr-2 text-lime-500"></i>Registros</h2>
+      <span id="logs-count-badge" class="text-xs text-slate-600">…</span>
+    </div>
+
+    <div id="logs-list">
+      <div style="text-align:center;padding:32px;color:#5A5A5A;font-size:12px">
+        <i class="fa-solid fa-spinner fa-spin mb-2 block"></i>Cargando…
+      </div>
+    </div>
+
+    <!-- Settings -->
+    <div id="logs-settings">
+      <label><i class="fa-solid fa-clock-rotate-left mr-1"></i>Retención de logs</label>
+      <div id="logs-settings-row">
+        <select id="logs-retencion-select" onchange="saveRetention()">
+          <option value="7">7 días</option>
+          <option value="14">14 días</option>
+          <option value="30">30 días</option>
+          <option value="60">60 días</option>
+          <option value="90">90 días</option>
+        </select>
+        <button id="logs-purge-btn" onclick="purgeOldLogs()" title="Eliminar logs más antiguos que el período seleccionado">
+          <i class="fa-solid fa-trash-can mr-1"></i>Limpiar
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── RIGHT PANEL ──────────────────────────────────────────────────────── -->
+  <div id="logs-detail">
+    <!-- Empty state -->
+    <div id="logs-empty">
+      <i class="fa-solid fa-terminal text-5xl mb-4"></i>
+      <p>Selecciona una ejecución para ver el detalle</p>
+      <p class="text-xs mt-2">Los registros se guardan automáticamente durante cada operación</p>
+    </div>
+
+    <!-- Execution detail -->
+    <div id="logs-exec-view" class="hidden">
+      <!-- Header -->
+      <div id="logs-exec-hdr">
+        <div id="logs-exec-hdr-top">
+          <div id="logs-exec-hdr-icon"></div>
+          <div id="logs-exec-hdr-body">
+            <div id="logs-exec-hdr-title">—</div>
+            <div id="logs-exec-hdr-sub">
+              <span id="logs-exec-hdr-date"></span>
+              <span>·</span>
+              <span id="logs-exec-hdr-duration"></span>
+              <span>·</span>
+              <span id="logs-exec-hdr-entries"></span>
+              <span id="logs-exec-live" class="hidden">
+                <span class="live-badge"><span class="w-1.5 h-1.5 rounded-full bg-yellow-400 inline-block"></span>En vivo</span>
+              </span>
+            </div>
+          </div>
+          <span id="logs-exec-hdr-status"></span>
+        </div>
+      </div>
+      <!-- Stats strip -->
+      <div id="logs-exec-stats" class="hidden"></div>
+      <!-- Log entries -->
+      <div id="logs-entries-wrap">
+        <div id="logs-no-entries" class="hidden">
+          <i class="fa-solid fa-circle-info mb-2 block text-xl opacity-30"></i>
+          Sin entradas de log para esta ejecución
+        </div>
+        <div id="logs-entries-list"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Context menu -->
+<div id="logs-ctx-menu" class="logs-ctx-menu hidden"></div>
+
+<script>
+// ── State ────────────────────────────────────────────────────────────────────
+let _execList = [];
+let _selectedId = null;
+let _liveTimer = null;
+let _liveLastCount = 0;
+
+// ── Type config ───────────────────────────────────────────────────────────────
+const TIPO_CFG = {
+  escaneo:    { icon: 'fa-magnifying-glass', bg: 'rgba(99,102,241,0.18)',  color: '#818CF8', label: 'Escaneo' },
+  movimiento: { icon: 'fa-arrows-up-down-left-right', bg: 'rgba(6,182,212,0.18)', color: '#22D3EE', label: 'Movimiento' },
+  renombrado: { icon: 'fa-pen-to-square',    bg: 'rgba(14,165,233,0.18)', color: '#38BDF8', label: 'Renombrado' },
+  duplicados: { icon: 'fa-copy',             bg: 'rgba(249,115,22,0.18)', color: '#FB923C', label: 'Duplicados' },
+  deshacer:   { icon: 'fa-rotate-left',      bg: 'rgba(239,68,68,0.15)',  color: '#F87171', label: 'Deshacer' },
+  vigilancia: { icon: 'fa-eye',              bg: 'rgba(20,184,166,0.18)', color: '#2DD4BF', label: 'Vigilancia' },
+};
+const TIPO_DEFAULT = { icon: 'fa-gear', bg: 'rgba(156,163,175,0.18)', color: '#9CA3AF', label: 'Operación' };
+
+const STATUS_CFG = {
+  completado:   { label: 'Completado',   cls: 'badge-completado',  icon: 'fa-circle-check',   pill: 'background:rgba(16,185,129,0.15);color:#10B981' },
+  en_progreso:  { label: 'En progreso',  cls: 'badge-en_progreso', icon: 'fa-spinner fa-spin', pill: 'background:rgba(245,158,11,0.15);color:#F59E0B' },
+  cancelado:    { label: 'Cancelado',    cls: 'badge-cancelado',   icon: 'fa-ban',             pill: 'background:rgba(107,114,128,0.15);color:#9CA3AF' },
+  error:        { label: 'Error',        cls: 'badge-error',       icon: 'fa-circle-xmark',    pill: 'background:rgba(239,68,68,0.15);color:#EF4444' },
+};
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+document.addEventListener('DOMContentLoaded', () => {
+  loadConfig();
+  loadExecutions();
+});
+
+// ── Load config ───────────────────────────────────────────────────────────────
+function loadConfig() {
+  fetch('/api/logs/config').then(r => r.json()).then(d => {
+    const sel = document.getElementById('logs-retencion-select');
+    sel.value = String(d.logs_retencion_dias || 30);
+  }).catch(() => {});
+}
+
+// ── Load executions ───────────────────────────────────────────────────────────
+function loadExecutions() {
+  fetch('/api/logs/ejecuciones').then(r => r.json()).then(list => {
+    _execList = list;
+    renderList();
+    document.getElementById('logs-count-badge').textContent = `${list.length} ejecuciones`;
+    // Auto-select first
+    if (list.length > 0 && !_selectedId) {
+      selectExecution(list[0].id);
+    }
+  }).catch(() => {
+    document.getElementById('logs-list').innerHTML =
+      '<div style="text-align:center;padding:20px;color:#5A5A5A;font-size:12px">Error cargando registros</div>';
+  });
+}
+
+// ── Render sidebar list ───────────────────────────────────────────────────────
+function renderList() {
+  const container = document.getElementById('logs-list');
+  if (_execList.length === 0) {
+    container.innerHTML = '<div style="text-align:center;padding:32px;color:#5A5A5A;font-size:12px"><i class="fa-solid fa-inbox mb-2 block text-xl"></i>Sin ejecuciones registradas</div>';
+    return;
+  }
+
+  // Group by date
+  const groups = {};
+  const now = new Date();
+  _execList.forEach(e => {
+    const d = new Date(e.fecha_inicio);
+    const label = _dateGroup(d, now);
+    if (!groups[label]) groups[label] = [];
+    groups[label].push(e);
+  });
+
+  const ORDER = ['Hoy', 'Ayer', 'Esta semana', 'Este mes', 'Más antiguas'];
+  let html = '';
+  ORDER.forEach(grp => {
+    if (!groups[grp]) return;
+    html += `<div class="logs-date-label">${grp}</div>`;
+    groups[grp].forEach(e => {
+      const cfg = TIPO_CFG[e.tipo] || TIPO_DEFAULT;
+      const sc = STATUS_CFG[e.estado] || STATUS_CFG.completado;
+      const active = e.id === _selectedId ? ' active' : '';
+      const ts = _fmtTime(e.fecha_inicio);
+      const entries = e.total_entradas != null ? `${e.total_entradas} entradas` : '';
+      html += `
+        <div class="logs-exec-item${active}" onclick="selectExecution(${e.id})" data-id="${e.id}">
+          <div class="logs-exec-icon" style="background:${cfg.bg}">
+            <i class="fa-solid ${cfg.icon}" style="color:${cfg.color}"></i>
+          </div>
+          <div class="logs-exec-body">
+            <div class="logs-exec-title">${_esc(e.descripcion || cfg.label)}</div>
+            <div class="logs-exec-meta">
+              <span class="${sc.cls}"><i class="fa-solid ${sc.icon.split(' ')[0]} ${sc.icon.split(' ')[1] || ''}"></i></span>
+              <span>${ts}</span>
+              ${entries ? `<span>· ${entries}</span>` : ''}
+            </div>
+          </div>
+          <button class="logs-exec-dot-btn" onclick="openCtxMenu(event, ${e.id})" title="Opciones">
+            <i class="fa-solid fa-ellipsis-vertical"></i>
+          </button>
+        </div>`;
+    });
+  });
+
+  container.innerHTML = html;
+}
+
+function _dateGroup(d, now) {
+  const today = new Date(now); today.setHours(0,0,0,0);
+  const yesterday = new Date(today); yesterday.setDate(today.getDate()-1);
+  const weekAgo = new Date(today); weekAgo.setDate(today.getDate()-7);
+  const monthAgo = new Date(today); monthAgo.setDate(today.getDate()-30);
+  if (d >= today) return 'Hoy';
+  if (d >= yesterday) return 'Ayer';
+  if (d >= weekAgo) return 'Esta semana';
+  if (d >= monthAgo) return 'Este mes';
+  return 'Más antiguas';
+}
+
+function _fmtTime(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  return d.toLocaleTimeString('es-ES', {hour:'2-digit', minute:'2-digit'});
+}
+
+function _fmtDate(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  return d.toLocaleDateString('es-ES', {day:'2-digit', month:'short', year:'numeric'})
+         + ' ' + d.toLocaleTimeString('es-ES', {hour:'2-digit', minute:'2-digit'});
+}
+
+function _duration(t1, t2) {
+  if (!t1 || !t2) return null;
+  const secs = Math.round((new Date(t2) - new Date(t1)) / 1000);
+  if (secs < 60) return `${secs}s`;
+  const m = Math.floor(secs/60), s = secs%60;
+  if (m < 60) return `${m}m ${s}s`;
+  const h = Math.floor(m/60); return `${h}h ${m%60}m`;
+}
+
+function _esc(s) {
+  return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// ── Select execution ──────────────────────────────────────────────────────────
+function selectExecution(id) {
+  _selectedId = id;
+  // Stop any live polling
+  if (_liveTimer) { clearInterval(_liveTimer); _liveTimer = null; }
+
+  // Update active state in list
+  document.querySelectorAll('.logs-exec-item').forEach(el => {
+    el.classList.toggle('active', +el.dataset.id === id);
+  });
+
+  // Hide empty state, show detail
+  document.getElementById('logs-empty').style.display = 'none';
+  const view = document.getElementById('logs-exec-view');
+  view.classList.remove('hidden');
+
+  fetch(`/api/logs/ejecuciones/${id}`).then(r => r.json()).then(data => {
+    renderDetail(data);
+    // If in-progress, start live polling
+    if (data.estado === 'en_progreso') {
+      _liveLastCount = (data.entradas || []).length;
+      _liveTimer = setInterval(() => pollLiveExecution(id), 2000);
+    }
+  }).catch(() => {});
+}
+
+function pollLiveExecution(id) {
+  if (_selectedId !== id) { clearInterval(_liveTimer); _liveTimer = null; return; }
+  fetch(`/api/logs/ejecuciones/${id}`).then(r => r.json()).then(data => {
+    // Only re-render if new entries or status changed
+    const newCount = (data.entradas || []).length;
+    if (newCount !== _liveLastCount || data.estado !== 'en_progreso') {
+      _liveLastCount = newCount;
+      renderDetail(data);
+      // Update sidebar list (status may have changed)
+      const idx = _execList.findIndex(e => e.id === id);
+      if (idx !== -1) {
+        _execList[idx] = {..._execList[idx], estado: data.estado, total_entradas: newCount};
+        renderList();
+      }
+      if (data.estado !== 'en_progreso') {
+        clearInterval(_liveTimer); _liveTimer = null;
+      }
+    }
+  }).catch(() => {});
+}
+
+// ── Render detail panel ───────────────────────────────────────────────────────
+function renderDetail(data) {
+  const cfg = TIPO_CFG[data.tipo] || TIPO_DEFAULT;
+  const sc = STATUS_CFG[data.estado] || STATUS_CFG.completado;
+  const dur = _duration(data.fecha_inicio, data.fecha_fin);
+  const entradas = data.entradas || [];
+  const live = data.estado === 'en_progreso';
+
+  // Header icon
+  document.getElementById('logs-exec-hdr-icon').innerHTML =
+    `<i class="fa-solid ${cfg.icon}" style="color:${cfg.color}"></i>`;
+  document.getElementById('logs-exec-hdr-icon').style.cssText =
+    `width:40px;height:40px;border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:17px;flex-shrink:0;background:${cfg.bg}`;
+
+  document.getElementById('logs-exec-hdr-title').textContent = data.descripcion || cfg.label;
+  document.getElementById('logs-exec-hdr-date').textContent = _fmtDate(data.fecha_inicio);
+  document.getElementById('logs-exec-hdr-duration').textContent = dur ? `⏱ ${dur}` : (live ? 'En progreso…' : '');
+  document.getElementById('logs-exec-hdr-entries').textContent = `${entradas.length} entradas`;
+  document.getElementById('logs-exec-hdr-status').innerHTML =
+    `<span class="exec-status-pill" style="${sc.pill}"><i class="fa-solid ${sc.icon}"></i> ${sc.label}</span>`;
+  document.getElementById('logs-exec-live').classList.toggle('hidden', !live);
+
+  // Stats strip (parse stats_json if available)
+  const statsEl = document.getElementById('logs-exec-stats');
+  let stats = null;
+  try { stats = data.stats_json ? JSON.parse(data.stats_json) : null; } catch(e) {}
+  if (stats && Object.keys(stats).length > 0) {
+    statsEl.classList.remove('hidden');
+    statsEl.innerHTML = _renderStats(stats, data.tipo);
+  } else {
+    statsEl.classList.add('hidden');
+  }
+
+  // Log entries
+  const listEl = document.getElementById('logs-entries-list');
+  const noEl = document.getElementById('logs-no-entries');
+  if (entradas.length === 0) {
+    noEl.classList.remove('hidden');
+    listEl.innerHTML = '';
+  } else {
+    noEl.classList.add('hidden');
+    listEl.innerHTML = entradas.map(e => {
+      const lvl = e.nivel || 'info';
+      const icon = lvl === 'ok' ? '✔' : lvl === 'warn' ? '⚠' : lvl === 'error' ? '✖' : '▸';
+      const ts = e.timestamp ? new Date(e.timestamp).toLocaleTimeString('es-ES', {hour:'2-digit',minute:'2-digit',second:'2-digit'}) : '';
+      return `<div class="log-entry log-${lvl}">
+        <span class="log-ts">[${ts}]</span>
+        <span class="log-lvl">${icon}</span>
+        <span class="log-msg">${_esc(e.mensaje)}</span>
+      </div>`;
+    }).join('');
+    // Scroll to bottom to see latest
+    const wrap = document.getElementById('logs-entries-wrap');
+    wrap.scrollTop = wrap.scrollHeight;
+  }
+}
+
+function _renderStats(stats, tipo) {
+  if (tipo === 'escaneo') {
+    const parts = [];
+    if (stats.new != null) parts.push(`Nuevos: <strong>${stats.new}</strong>`);
+    if (stats.modified != null) parts.push(`Modificados: <strong>${stats.modified}</strong>`);
+    if (stats.unchanged != null) parts.push(`Sin cambios: <strong>${stats.unchanged}</strong>`);
+    if (stats.disappeared != null) parts.push(`Desaparecidos: <strong>${stats.disappeared}</strong>`);
+    if (stats.cache_hits != null) parts.push(`Caché: <strong>${stats.cache_hits}</strong>`);
+    if (stats.analizados != null) parts.push(`Analizados: <strong>${stats.analizados}</strong>`);
+    if (stats.cancelled) parts.push(`<span style="color:#9CA3AF">Cancelado</span>`);
+    return parts.join('<span style="color:var(--border);margin:0 4px">|</span>');
+  }
+  const parts = [];
+  if (stats.ok != null) parts.push(`Éxitos: <strong>${stats.ok}</strong>`);
+  if (stats.failed != null) parts.push(`Errores: <strong>${stats.failed}</strong>`);
+  if (stats.error) parts.push(`<span style="color:#EF4444">${_esc(stats.error)}</span>`);
+  return parts.join('<span style="color:var(--border);margin:0 4px">|</span>');
+}
+
+// ── Context menu ──────────────────────────────────────────────────────────────
+let _ctxId = null;
+
+function openCtxMenu(e, id) {
+  e.stopPropagation();
+  _ctxId = id;
+  const menu = document.getElementById('logs-ctx-menu');
+  menu.innerHTML = `
+    <button class="danger" onclick="deleteExecution(${id})">
+      <i class="fa-solid fa-trash-can"></i>Eliminar registro
+    </button>`;
+  menu.classList.remove('hidden');
+  // Position near cursor
+  const x = Math.min(e.clientX, window.innerWidth - 160);
+  const y = Math.min(e.clientY + 4, window.innerHeight - 80);
+  menu.style.left = x + 'px';
+  menu.style.top  = y + 'px';
+}
+
+function closeCtxMenu() {
+  document.getElementById('logs-ctx-menu').classList.add('hidden');
+  _ctxId = null;
+}
+
+document.addEventListener('click', closeCtxMenu);
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeCtxMenu(); });
+
+function deleteExecution(id) {
+  closeCtxMenu();
+  if (!confirm('¿Eliminar este registro de ejecución?')) return;
+  fetch(`/api/logs/ejecuciones/${id}`, {method:'DELETE'}).then(() => {
+    _execList = _execList.filter(e => e.id !== id);
+    if (_selectedId === id) {
+      _selectedId = null;
+      document.getElementById('logs-empty').style.display = '';
+      document.getElementById('logs-exec-view').classList.add('hidden');
+    }
+    renderList();
+    document.getElementById('logs-count-badge').textContent = `${_execList.length} ejecuciones`;
+  }).catch(() => alert('Error al eliminar el registro'));
+}
+
+// ── Retention settings ────────────────────────────────────────────────────────
+function saveRetention() {
+  const dias = +document.getElementById('logs-retencion-select').value;
+  fetch('/api/logs/config', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({logs_retencion_dias: dias}),
+  }).catch(() => {});
+}
+
+function purgeOldLogs() {
+  const dias = document.getElementById('logs-retencion-select').value;
+  if (!confirm(`¿Eliminar todos los registros más antiguos de ${dias} días?`)) return;
+  fetch('/api/logs/purge', {method:'POST'}).then(r => r.json()).then(d => {
+    showToast(`Eliminados ${d.eliminados} registros antiguos`, 'success');
+    loadExecutions();
+  }).catch(() => showToast('Error al limpiar logs', 'error'));
+}
+</script>
+{% endblock %}

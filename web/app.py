@@ -65,6 +65,8 @@ class _ScanState:
         self.stats_detail: dict = {}
         self.speed_per_min: float = 0.0
         self._t_scan_start: float = 0.0   # absolute time when scan started
+        # DB ejecucion tracking
+        self._ejecucion_id: int | None = None
 
 
 _ss = _ScanState()
@@ -100,13 +102,20 @@ def _snapshot() -> dict:
 
 
 def _log_scan(level: str, msg: str) -> None:
-    """Append a timestamped log line to the scan state (thread-safe, capped at 200)."""
+    """Append a timestamped log line to the scan state and persist to DB (thread-safe, capped at 200)."""
     from datetime import datetime as _dt
     entry = {"ts": _dt.now().strftime("%H:%M:%S"), "level": level, "msg": msg}
+    ejecucion_id = None
     with _lock:
         _ss.log_lines.append(entry)
         if len(_ss.log_lines) > 200:
             _ss.log_lines = _ss.log_lines[-200:]
+        ejecucion_id = _ss._ejecucion_id
+    if ejecucion_id:
+        try:
+            database.log_entrada(ejecucion_id, level, msg)
+        except Exception:
+            pass
 
 
 # ── Template helpers ──────────────────────────────────────────────────────────
@@ -332,10 +341,65 @@ def api_eliminar_conversacion(conv_id):
     return jsonify({"ok": True})
 
 
+# ── Logs page & API ──────────────────────────────────────────────────────────
+
+
+@app.route("/logs")
+def logs_page():
+    return render_template("logs.html")
+
+
+@app.route("/api/logs/ejecuciones")
+def api_logs_ejecuciones():
+    dias = int(database.get_config("logs_retencion_dias", "30"))
+    return jsonify(database.get_ejecuciones(dias))
+
+
+@app.route("/api/logs/ejecuciones/<int:eid>")
+def api_logs_ejecucion_detail(eid):
+    ejec = database.get_ejecucion(eid)
+    if not ejec:
+        return jsonify({"error": "No encontrado"}), 404
+    entradas = database.get_entradas_ejecucion(eid)
+    return jsonify({**ejec, "entradas": entradas})
+
+
+@app.route("/api/logs/ejecuciones/<int:eid>", methods=["DELETE"])
+def api_logs_ejecucion_delete(eid):
+    database.delete_ejecucion(eid)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/logs/config")
+def api_logs_config_get():
+    dias = database.get_config("logs_retencion_dias", "30")
+    return jsonify({"logs_retencion_dias": int(dias)})
+
+
+@app.route("/api/logs/config", methods=["POST"])
+def api_logs_config_set():
+    data = request.get_json() or {}
+    dias = max(1, min(int(data.get("logs_retencion_dias", 30)), 365))
+    database.set_config("logs_retencion_dias", str(dias))
+    return jsonify({"ok": True, "logs_retencion_dias": dias})
+
+
+@app.route("/api/logs/purge", methods=["POST"])
+def api_logs_purge():
+    dias = int(database.get_config("logs_retencion_dias", "30"))
+    n = database.purge_old_ejecuciones(dias)
+    return jsonify({"ok": True, "eliminados": n})
+
+
 # ── Scan API ──────────────────────────────────────────────────────────────────
 
 
 def _run_scan(target_path: str):
+    # ── Create ejecucion record before resetting state ────────────────────────
+    _eid = database.create_ejecucion(
+        "escaneo",
+        f"Escaneo: {Path(target_path).name} — {target_path}",
+    )
     # ── Reset state ───────────────────────────────────────────────────────────
     with _lock:
         _ss.running = True
@@ -358,6 +422,7 @@ def _run_scan(target_path: str):
         _ss.log_lines.clear()
         _ss.stats_detail.clear()
         _ss.speed_per_min = 0.0
+        _ss._ejecucion_id = _eid
 
     try:
         _log_scan("info", f"Iniciando escaneo de: {target_path}")
@@ -696,6 +761,8 @@ def _run_scan(target_path: str):
             f" — {_ss.analizados} analizados · {total_fallos} fallos"
             f" · {savings_pct}% hashing omitido",
         )
+        _estado = "cancelado" if _ss.summary.get("cancelled") else "completado"
+        database.finish_ejecucion(_eid, _estado, json.dumps(_ss.summary, default=str))
 
     except Exception as exc:
         err = f"{type(exc).__name__}: {exc}"
@@ -703,10 +770,15 @@ def _run_scan(target_path: str):
             _ss.errores.append(err)
             _ss.fase = "error"
         _log_scan("error", f"Error fatal: {err}")
+        try:
+            database.finish_ejecucion(_eid, "error", json.dumps({"error": err}))
+        except Exception:
+            pass
 
     finally:
         with _lock:
             _ss.running = False
+            _ss._ejecucion_id = None
 
 
 @app.route("/api/scan", methods=["POST"])
@@ -1070,7 +1142,11 @@ def api_undo(backup_id):
 
 @app.route("/api/undo-all", methods=["POST"])
 def api_undo_all():
+    eid = database.create_ejecucion("deshacer", "Deshacer todas las operaciones pendientes")
     success, fail = organizer.undo_all_pending()
+    database.log_entrada(eid, "ok" if success > 0 else "info",
+                         f"Revertidas {success} operaciones · {fail} fallaron")
+    database.finish_ejecucion(eid, "completado", json.dumps({"ok": success, "failed": fail}))
     return jsonify(
         {
             "success": success,
@@ -1126,16 +1202,20 @@ def api_eliminar_duplicados():
 
     ok_count = fail_count = 0
     errores: list[str] = []
+    eid = database.create_ejecucion("duplicados", f"Eliminar duplicados: {len(eliminar_ids)} archivos")
     for aid in eliminar_ids:
         success, msg = organizer.execute_delete_duplicate(aid, backup_dir)
         if success:
             ok_count += 1
+            database.log_entrada(eid, "ok", f"Duplicado eliminado: ID {aid}")
         else:
             fail_count += 1
             errores.append(msg)
+            database.log_entrada(eid, "error", f"Error ID {aid}: {msg}")
 
     if ok_count:
         database.descartar_recomendaciones_por_archivo_ids(eliminar_ids)
+    database.finish_ejecucion(eid, "completado", json.dumps({"ok": ok_count, "failed": fail_count}))
 
     return jsonify(
         {
@@ -1201,6 +1281,7 @@ def api_aplicar_renombrado():
 
     ok_count = fail_count = 0
     errores: list[str] = []
+    eid = database.create_ejecucion("renombrado", f"Renombrado masivo: {len(items)} archivos")
 
     for item in items:
         try:
@@ -1234,10 +1315,17 @@ def api_aplicar_renombrado():
         success, msg = organizer.execute_rename(aid, nuevo_nombre)
         if success:
             ok_count += 1
+            database.log_entrada(eid, "ok", f"Renombrado: {archivo['nombre']} → {nuevo_nombre}")
         else:
             fail_count += 1
             errores.append(msg)
+            database.log_entrada(eid, "error", f"Error renombrando {archivo['nombre']}: {msg}")
 
+    database.finish_ejecucion(
+        eid,
+        "completado" if ok_count > 0 or fail_count == 0 else "error",
+        json.dumps({"ok": ok_count, "failed": fail_count}),
+    )
     return jsonify(
         {
             "ok": ok_count,
@@ -1254,8 +1342,16 @@ _plan_apply_states: dict[int, dict] = {}
 _plan_lock = threading.Lock()
 
 
-def _run_plan_apply(plan_id: int) -> None:
+def _run_plan_apply(plan_id: int, ejecucion_id: int | None = None) -> None:
     """Background thread: apply approved plan items one by one."""
+
+    def _log_plan(level: str, msg: str) -> None:
+        if ejecucion_id:
+            try:
+                database.log_entrada(ejecucion_id, level, msg)
+            except Exception:
+                pass
+
     with _plan_lock:
         _plan_apply_states[plan_id] = {
             "running": True,
@@ -1271,6 +1367,7 @@ def _run_plan_apply(plan_id: int) -> None:
         with _plan_lock:
             _plan_apply_states[plan_id]["total"] = len(items)
         database.update_plan_estado(plan_id, "en_progreso")
+        _log_plan("info", f"Iniciando plan #{plan_id}: {len(items)} items aprobados")
 
         for item in items:
             if not _plan_apply_states.get(plan_id, {}).get("running"):
@@ -1285,6 +1382,7 @@ def _run_plan_apply(plan_id: int) -> None:
             if not src.exists():
                 err = f"Archivo no encontrado: {nombre}"
                 database.update_plan_item_estado(item["id"], "error", err)
+                _log_plan("error", f"{nombre}: {err}")
                 with _plan_lock:
                     st = _plan_apply_states[plan_id]
                     st["errors"] += 1
@@ -1308,6 +1406,7 @@ def _run_plan_apply(plan_id: int) -> None:
                     "aplicado",
                     backup_id=backup["id"] if backup else None,
                 )
+                _log_plan("ok", f"Movido: {nombre} → {dst.parent.name}/")
                 with _plan_lock:
                     st = _plan_apply_states[plan_id]
                     st["ok"] += 1
@@ -1315,6 +1414,7 @@ def _run_plan_apply(plan_id: int) -> None:
                     st["results"].append({"id": item["id"], "ok": True, "msg": "Aplicado"})
             else:
                 database.update_plan_item_estado(item["id"], "error", msg)
+                _log_plan("error", f"Error moviendo {nombre}: {msg}")
                 with _plan_lock:
                     st = _plan_apply_states[plan_id]
                     st["errors"] += 1
@@ -1323,9 +1423,23 @@ def _run_plan_apply(plan_id: int) -> None:
 
         database.update_plan_stats(plan_id)
         database.update_plan_estado(plan_id, "completado", time.strftime("%Y-%m-%dT%H:%M:%S"))
+        st_final = _plan_apply_states.get(plan_id, {})
+        _log_plan("ok", f"Plan completado: {st_final.get('ok', 0)} aplicados · {st_final.get('errors', 0)} errores")
+        if ejecucion_id:
+            try:
+                database.finish_ejecucion(ejecucion_id, "completado",
+                    json.dumps({"ok": st_final.get("ok", 0), "errors": st_final.get("errors", 0)}))
+            except Exception:
+                pass
 
     except Exception as exc:
         _wlog.error("plan_apply error plan_id=%d: %s", plan_id, exc)
+        _log_plan("error", f"Error fatal: {exc}")
+        if ejecucion_id:
+            try:
+                database.finish_ejecucion(ejecucion_id, "error", json.dumps({"error": str(exc)}))
+            except Exception:
+                pass
         with _plan_lock:
             if plan_id in _plan_apply_states:
                 _plan_apply_states[plan_id]["error"] = str(exc)
@@ -1441,7 +1555,13 @@ def api_plan_aplicar(plan_id):
     with _plan_lock:
         if _plan_apply_states.get(plan_id, {}).get("running"):
             return jsonify({"error": "Aplicación ya en curso"}), 409
-    thread = threading.Thread(target=_run_plan_apply, args=(plan_id,), daemon=True)
+    aprobados = sum(1 for i in database.get_plan_items(plan_id) if i["estado"] == "aprobado")
+    carpeta = Path(plan.get("carpeta_raiz", "")).name or plan.get("carpeta_raiz", "")
+    eid = database.create_ejecucion(
+        "movimiento",
+        f"Plan #{plan_id}: {aprobados} archivos → {carpeta}",
+    )
+    thread = threading.Thread(target=_run_plan_apply, args=(plan_id, eid), daemon=True)
     thread.start()
     return jsonify({"message": "Aplicación iniciada"})
 
@@ -1594,6 +1714,11 @@ def api_watch_status():
 
 def start_server(open_browser: bool = True):
     database.create_tables()
+    try:
+        dias = int(database.get_config("logs_retencion_dias", "30"))
+        database.purge_old_ejecuciones(dias)
+    except Exception:
+        pass
     atexit.register(_watcher_module.manager.stop)
     if open_browser:
         threading.Timer(1.2, lambda: webbrowser.open("http://localhost:5000")).start()

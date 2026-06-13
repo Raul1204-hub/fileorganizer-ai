@@ -359,6 +359,9 @@
       <a href="/backup" class="nav-link {% if '/backup' in request.path %}active{% endif %}">
         <i class="fa-solid fa-rotate-left w-4 text-center text-rose-400"></i> Backup &amp; Undo
       </a>
+      <a href="/logs" class="nav-link {% if '/logs' in request.path %}active{% endif %}">
+        <i class="fa-solid fa-terminal w-4 text-center text-lime-400"></i> Registros
+      </a>
     </nav>
 
     <!-- Librarian mascot -->
@@ -442,7 +445,7 @@
     </div>
     <!-- ETA -->
     <span id="sp-eta" class="text-xs flex-shrink-0 hidden sm:block" style="color:var(--text-3)"></span>
-    <!-- Expand button -->
+    <!-- Expand button → opens Registros page -->
     <button onclick="toggleScanDetail()" id="sp-expand-btn"
             class="text-xs px-2 py-1 rounded-md transition flex-shrink-0"
             style="background:rgba(99,102,241,0.10);color:#6366F1"
@@ -450,6 +453,13 @@
       <i id="sp-expand-icon" class="fa-solid fa-chevron-up"></i>
       <span id="sp-expand-label" class="ml-1">Expandir</span>
     </button>
+    <!-- Link to full logs page -->
+    <a href="/logs" id="sp-logs-btn"
+       class="text-xs px-2 py-1 rounded-md transition flex-shrink-0 no-underline"
+       style="background:rgba(132,204,22,0.10);color:#84cc16"
+       title="Ver historial completo en Registros">
+      <i class="fa-solid fa-arrow-up-right-from-square"></i>
+    </a>
     <!-- Cancel button -->
     <button onclick="cancelScan()" id="sp-cancel-btn"
             class="text-xs px-2.5 py-1 rounded-md flex-shrink-0 transition"

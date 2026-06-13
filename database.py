@@ -167,6 +167,29 @@ def create_tables():
             backup_id     INTEGER,
             orden         INTEGER DEFAULT 0
         );
+
+        CREATE TABLE IF NOT EXISTS ejecuciones (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            tipo         TEXT NOT NULL,
+            descripcion  TEXT,
+            fecha_inicio TEXT NOT NULL,
+            fecha_fin    TEXT,
+            estado       TEXT DEFAULT 'en_progreso',
+            stats_json   TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS log_entradas (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            ejecucion_id INTEGER NOT NULL,
+            timestamp    TEXT NOT NULL,
+            nivel        TEXT NOT NULL,
+            mensaje      TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS config (
+            clave TEXT PRIMARY KEY,
+            valor TEXT NOT NULL
+        );
     """)
     for cat_id, nombre, color, icono in CATEGORIAS_SEED:
         cur.execute(
@@ -205,6 +228,17 @@ def migrate_schema():
     chat_cols = {row["name"] for row in cur.fetchall()}
     if "conversacion_id" not in chat_cols:
         cur.execute("ALTER TABLE chat_historial ADD COLUMN conversacion_id INTEGER")
+    # New tables for execution log feature (idempotent)
+    cur.execute("""CREATE TABLE IF NOT EXISTS ejecuciones (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, tipo TEXT NOT NULL,
+        descripcion TEXT, fecha_inicio TEXT NOT NULL,
+        fecha_fin TEXT, estado TEXT DEFAULT 'en_progreso', stats_json TEXT)""")
+    cur.execute("""CREATE TABLE IF NOT EXISTS log_entradas (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        ejecucion_id INTEGER NOT NULL,
+        timestamp TEXT NOT NULL, nivel TEXT NOT NULL, mensaje TEXT NOT NULL)""")
+    cur.execute("""CREATE TABLE IF NOT EXISTS config (
+        clave TEXT PRIMARY KEY, valor TEXT NOT NULL)""")
     conn.commit()
     conn.close()
 
@@ -1399,6 +1433,132 @@ def descartar_recomendaciones_por_archivo_ids(archivo_ids: list[int]) -> None:
     cur.execute(
         f"UPDATE recomendaciones SET descartada = 1 WHERE archivo_id IN ({placeholders}) AND tipo = 'R1'",
         archivo_ids,
+    )
+    conn.commit()
+    conn.close()
+
+
+# ── ejecuciones / log_entradas ────────────────────────────────────────────────
+
+
+def create_ejecucion(tipo: str, descripcion: str) -> int:
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT INTO ejecuciones (tipo, descripcion, fecha_inicio, estado) VALUES (?, ?, ?, 'en_progreso')",
+        (tipo, descripcion, datetime.now().isoformat()),
+    )
+    eid = cur.lastrowid
+    conn.commit()
+    conn.close()
+    return eid
+
+
+def finish_ejecucion(ejecucion_id: int, estado: str, stats_json: str | None = None) -> None:
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        "UPDATE ejecuciones SET estado = ?, fecha_fin = ?, stats_json = ? WHERE id = ?",
+        (estado, datetime.now().isoformat(), stats_json, ejecucion_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+def log_entrada(ejecucion_id: int, nivel: str, mensaje: str) -> None:
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT INTO log_entradas (ejecucion_id, timestamp, nivel, mensaje) VALUES (?, ?, ?, ?)",
+        (ejecucion_id, datetime.now().isoformat(), nivel, mensaje),
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_ejecuciones(dias: int = 30) -> list[dict]:
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        """SELECT e.*, COUNT(l.id) AS total_entradas
+           FROM ejecuciones e
+           LEFT JOIN log_entradas l ON l.ejecucion_id = e.id
+           WHERE e.fecha_inicio >= datetime('now', ?)
+           GROUP BY e.id
+           ORDER BY e.fecha_inicio DESC""",
+        (f"-{dias} days",),
+    )
+    rows = cur.fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def get_ejecucion(ejecucion_id: int) -> dict | None:
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM ejecuciones WHERE id = ?", (ejecucion_id,))
+    row = cur.fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def get_entradas_ejecucion(ejecucion_id: int) -> list[dict]:
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT * FROM log_entradas WHERE ejecucion_id = ? ORDER BY id ASC",
+        (ejecucion_id,),
+    )
+    rows = cur.fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def delete_ejecucion(ejecucion_id: int) -> None:
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("DELETE FROM log_entradas WHERE ejecucion_id = ?", (ejecucion_id,))
+    cur.execute("DELETE FROM ejecuciones WHERE id = ?", (ejecucion_id,))
+    conn.commit()
+    conn.close()
+
+
+def purge_old_ejecuciones(dias: int) -> int:
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT id FROM ejecuciones WHERE fecha_inicio < datetime('now', ?)",
+        (f"-{dias} days",),
+    )
+    old_ids = [r["id"] for r in cur.fetchall()]
+    if old_ids:
+        placeholders = ",".join("?" * len(old_ids))
+        cur.execute(f"DELETE FROM log_entradas WHERE ejecucion_id IN ({placeholders})", old_ids)
+        cur.execute(f"DELETE FROM ejecuciones WHERE id IN ({placeholders})", old_ids)
+        conn.commit()
+    conn.close()
+    return len(old_ids)
+
+
+# ── config ────────────────────────────────────────────────────────────────────
+
+
+def get_config(clave: str, default: str = "") -> str:
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT valor FROM config WHERE clave = ?", (clave,))
+    row = cur.fetchone()
+    conn.close()
+    return row["valor"] if row else default
+
+
+def set_config(clave: str, valor: str) -> None:
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT INTO config (clave, valor) VALUES (?, ?) "
+        "ON CONFLICT(clave) DO UPDATE SET valor = excluded.valor",
+        (clave, valor),
     )
     conn.commit()
     conn.close()
