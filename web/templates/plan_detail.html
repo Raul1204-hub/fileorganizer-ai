@@ -390,6 +390,7 @@ async function aplicarPlan() {
   if (!ap) { showToast('Sin movimientos aprobados', 'warning'); return; }
   if (!confirm(`¿Mover ${ap} archivo(s) al disco? Esto puede tardar si hay archivos grandes.`)) return;
 
+  if (typeof librarianSetState === 'function') librarianSetState('working', `Moviendo ${ap} archivo(s)…`);
   _applying = true;
   const btn = document.getElementById('btn-apply');
   if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Aplicando…'; }
@@ -401,6 +402,7 @@ async function aplicarPlan() {
   const data = await res.json();
   if (!res.ok) {
     showToast(data.error || 'Error al iniciar', 'error');
+    if (typeof librarianSetState === 'function') librarianSetState('sad', 'No se pudo iniciar');
     _applying = false;
     if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fa-solid fa-play"></i> Aplicar plan'; }
     return;
@@ -413,7 +415,13 @@ async function aplicarPlan() {
     if (!s.running) {
       _sseSource.close();
       _applying = false;
-      showToast(`Plan aplicado — ${s.ok} OK · ${s.errors} error(es)`, s.errors ? 'warning' : 'success');
+      const hasErrors = s.errors > 0;
+      showToast(`Plan aplicado — ${s.ok} OK · ${s.errors} error(es)`, hasErrors ? 'warning' : 'success');
+      if (typeof librarianSetState === 'function') {
+        librarianSetState(hasErrors ? 'sad' : 'happy',
+          hasErrors ? `${s.ok} OK, ${s.errors} con error` : `¡${s.ok} archivo(s) movidos!`);
+        setTimeout(() => librarianSetState('idle'), 4500);
+      }
       setTimeout(() => location.reload(), 1800);
     }
   };
@@ -421,6 +429,7 @@ async function aplicarPlan() {
     _sseSource.close();
     _applying = false;
     showToast('Conexión SSE perdida — recarga para ver el estado', 'error');
+    if (typeof librarianSetState === 'function') { librarianSetState('sad', 'Conexión perdida'); setTimeout(()=>librarianSetState('idle'),3000); }
   };
 }
 
@@ -453,9 +462,14 @@ async function deshacerPlan() {
   if (!apl) { showToast('No hay movimientos aplicados que deshacer', 'warning'); return; }
   if (!confirm(`¿Deshacer ${apl} movimiento(s)? Los archivos volverán a su ubicación original.`)) return;
 
+  if (typeof librarianSetState === 'function') librarianSetState('working', `Deshaciendo ${apl} movimiento(s)…`);
   const res = await fetch(`/api/plan/${PLAN_ID}/deshacer`, {method: 'POST'});
   const data = await res.json();
   showToast(data.message || 'Operación completada', data.failed ? 'warning' : 'success');
+  if (typeof librarianSetState === 'function') {
+    librarianSetState(data.failed ? 'sad' : 'happy', data.failed ? 'Algunos errores al deshacer' : '¡Cambios revertidos!');
+    setTimeout(() => librarianSetState('idle'), 3500);
+  }
   setTimeout(() => location.reload(), 1500);
 }
 
