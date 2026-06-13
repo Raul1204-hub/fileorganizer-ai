@@ -758,3 +758,77 @@ def get_categorias():
     rows = cur.fetchall()
     conn.close()
     return [dict(r) for r in rows]
+
+
+# ── duplicados ────────────────────────────────────────────────────────────────
+
+
+def get_grupos_duplicados() -> list[dict]:
+    """Return duplicate groups sorted by recoverable space (descending).
+
+    Each group dict: hash, archivos, copias, espacio_recuperable, conservar_id.
+    conservar_id is the file with the shortest path; ties broken by oldest
+    fecha_modificacion.
+    """
+    from collections import defaultdict
+
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        """SELECT a.id, a.nombre, a.ruta_actual, a.tamaño_bytes, a.fecha_modificacion,
+                  a.hash_blake2,
+                  c.nombre AS categoria_nombre, c.color AS categoria_color,
+                  c.icono AS categoria_icono
+           FROM archivos a
+           LEFT JOIN categorias c ON a.categoria_id = c.id
+           WHERE a.hash_blake2 != '' AND a.hash_blake2 IS NOT NULL AND a.existe = 1
+           ORDER BY a.hash_blake2"""
+    )
+    rows = [dict(r) for r in cur.fetchall()]
+    conn.close()
+
+    by_hash: dict[str, list[dict]] = defaultdict(list)
+    for row in rows:
+        by_hash[row["hash_blake2"]].append(row)
+
+    grupos: list[dict] = []
+    for hash_val, archivos in by_hash.items():
+        if len(archivos) < 2:
+            continue
+        tamaño = archivos[0]["tamaño_bytes"] or 0
+        copias = len(archivos)
+        espacio_recuperable = tamaño * (copias - 1)
+
+        sorted_arch = sorted(
+            archivos,
+            key=lambda a: (len(a["ruta_actual"] or ""), a["fecha_modificacion"] or ""),
+        )
+        conservar_id = sorted_arch[0]["id"]
+
+        grupos.append(
+            {
+                "hash": hash_val,
+                "archivos": archivos,
+                "copias": copias,
+                "espacio_recuperable": espacio_recuperable,
+                "conservar_id": conservar_id,
+            }
+        )
+
+    grupos.sort(key=lambda g: g["espacio_recuperable"], reverse=True)
+    return grupos
+
+
+def descartar_recomendaciones_por_archivo_ids(archivo_ids: list[int]) -> None:
+    """Discard all R1 (duplicate) recommendations for the given file IDs."""
+    if not archivo_ids:
+        return
+    conn = get_connection()
+    cur = conn.cursor()
+    placeholders = ",".join("?" * len(archivo_ids))
+    cur.execute(
+        f"UPDATE recomendaciones SET descartada = 1 WHERE archivo_id IN ({placeholders}) AND tipo = 'R1'",
+        archivo_ids,
+    )
+    conn.commit()
+    conn.close()

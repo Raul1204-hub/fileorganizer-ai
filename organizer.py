@@ -88,6 +88,7 @@ def undo_operation(backup_id: int) -> tuple[bool, str]:
             dst.parent.mkdir(parents=True, exist_ok=True)
             shutil.move(str(src), str(dst))
         database.update_archivo_ruta(backup["archivo_id"], ruta_original)
+        database.mark_archivo_existe(backup["archivo_id"])
         database.mark_backup_revertido(backup_id)
         database.insert_historial(
             backup["archivo_id"],
@@ -98,6 +99,43 @@ def undo_operation(backup_id: int) -> tuple[bool, str]:
         return True, "Operación revertida correctamente"
     except (PermissionError, OSError) as e:
         return False, f"Error al revertir: {e}"
+
+
+def execute_delete_duplicate(archivo_id: int, backup_dir: Path) -> tuple[bool, str]:
+    """Move a duplicate file to the backup folder and mark it as deleted.
+
+    Writes the backup record before any filesystem change so that
+    undo_operation() can later restore the file.  Returns (success, message).
+    """
+    archivo = database.get_archivo(archivo_id)
+    if not archivo:
+        return False, f"Archivo {archivo_id} no encontrado en la base de datos"
+
+    src = Path(archivo["ruta_actual"])
+    if not src.exists():
+        return False, f"Archivo no encontrado en disco: {src}"
+
+    dst = backup_dir / src.name
+    if dst.exists():
+        dst = backup_dir / f"{src.stem}_{archivo_id}{src.suffix}"
+
+    # Write backup record before any filesystem change
+    database.insert_backup_operacion(
+        archivo_id=archivo_id,
+        nombre_original=archivo["nombre"],
+        ruta_original=str(src),
+        ruta_nueva=str(dst),
+        operacion="eliminar_dup",
+    )
+
+    try:
+        backup_dir.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(src), str(dst))
+        database.mark_archivo_desaparecido(archivo_id)
+        database.insert_historial(archivo_id, str(src), str(dst), "eliminar_dup")
+        return True, f"Movido a backup: {dst.name}"
+    except (PermissionError, OSError) as exc:
+        return False, f"Error al mover: {exc}"
 
 
 def undo_all_pending() -> tuple[int, int]:

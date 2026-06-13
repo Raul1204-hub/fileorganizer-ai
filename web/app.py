@@ -31,6 +31,7 @@ from config import EMBED_MODEL, VISION_MAX_MB, VISION_MODEL
 app = Flask(__name__, template_folder="templates")
 app.secret_key = "fileorganizer-ai-secret-2024"
 
+
 # ── Global scan state ─────────────────────────────────────────────────────────
 
 _EMA_ALPHA = 0.2
@@ -706,6 +707,73 @@ def api_undo_all():
             "success": success,
             "fail": fail,
             "message": f"Revertidas {success} operaciones. {fail} fallaron.",
+        }
+    )
+
+
+# ── Duplicados ────────────────────────────────────────────────────────────────
+
+
+@app.route("/duplicados")
+def duplicados():
+    grupos = database.get_grupos_duplicados()
+    total_recuperable = sum(g["espacio_recuperable"] for g in grupos)
+    return render_template(
+        "duplicados.html",
+        grupos=grupos,
+        total_recuperable=total_recuperable,
+        total_grupos=len(grupos),
+    )
+
+
+@app.route("/api/duplicados")
+def api_duplicados():
+    grupos = database.get_grupos_duplicados()
+    total_recuperable = sum(g["espacio_recuperable"] for g in grupos)
+    return jsonify(
+        {
+            "grupos": grupos,
+            "total_recuperable": total_recuperable,
+            "total_grupos": len(grupos),
+        }
+    )
+
+
+@app.route("/api/duplicados/eliminar", methods=["POST"])
+def api_eliminar_duplicados():
+    data = request.get_json() or {}
+    raw_ids = data.get("eliminar_ids", [])
+    eliminar_ids = []
+    for i in raw_ids:
+        try:
+            eliminar_ids.append(int(i))
+        except (TypeError, ValueError):
+            pass
+    if not eliminar_ids:
+        return jsonify({"error": "Sin archivos seleccionados"}), 400
+
+    timestamp = time.strftime("%Y-%m-%d_%H%M%S")
+    backup_dir = Path(__file__).parent.parent / "data" / "backup_dup" / timestamp
+
+    ok_count = fail_count = 0
+    errores: list[str] = []
+    for aid in eliminar_ids:
+        success, msg = organizer.execute_delete_duplicate(aid, backup_dir)
+        if success:
+            ok_count += 1
+        else:
+            fail_count += 1
+            errores.append(msg)
+
+    if ok_count:
+        database.descartar_recomendaciones_por_archivo_ids(eliminar_ids)
+
+    return jsonify(
+        {
+            "ok": ok_count,
+            "failed": fail_count,
+            "errores": errores[:5],
+            "message": f"{ok_count} archivo(s) movidos al backup. {fail_count} error(es).",
         }
     )
 

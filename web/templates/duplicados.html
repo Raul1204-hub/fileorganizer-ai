@@ -1,0 +1,343 @@
+{% extends "base.html" %}
+{% block title %}Duplicados — FileOrganizer AI{% endblock %}
+{% block page_title %}Gestión de duplicados{% endblock %}
+
+{% block head %}
+<style>
+  .file-row-keep {
+    background: rgb(240 253 244);
+    border-left-color: rgb(74 222 128) !important;
+  }
+  .file-row-delete {
+    background: rgb(255 241 242);
+    border-left-color: rgb(252 165 165) !important;
+  }
+  .dark .file-row-keep {
+    background: rgba(6, 78, 59, 0.25);
+    border-left-color: rgb(22 101 52) !important;
+  }
+  .dark .file-row-delete {
+    background: rgba(127, 29, 29, 0.2);
+    border-left-color: rgb(153 27 27) !important;
+  }
+</style>
+{% endblock %}
+
+{% block content %}
+
+{% if total_grupos == 0 %}
+<!-- Empty state -->
+<div class="flex flex-col items-center justify-center py-24 gap-4">
+  <div class="w-16 h-16 rounded-2xl bg-emerald-100 dark:bg-emerald-950 flex items-center justify-center">
+    <i class="fa-solid fa-check text-3xl text-emerald-500"></i>
+  </div>
+  <div class="text-center">
+    <p class="text-lg font-semibold text-gray-800 dark:text-gray-200">Sin duplicados detectados</p>
+    <p class="text-sm text-gray-400 mt-1">No hay archivos con el mismo contenido en la base de datos.</p>
+    <p class="text-xs text-gray-400 mt-1">Ejecuta un escaneo desde el Dashboard para detectar duplicados.</p>
+  </div>
+  <a href="/" class="mt-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-medium transition">
+    Ir al Dashboard
+  </a>
+</div>
+
+{% else %}
+
+<!-- Header -->
+<div class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-6">
+  <div>
+    <h1 class="text-2xl font-bold text-gray-900 dark:text-white flex items-center gap-2">
+      <i class="fa-solid fa-copy text-orange-500"></i>
+      Archivos duplicados
+    </h1>
+    <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+      <span class="font-semibold text-orange-500">{{ total_grupos }}</span>
+      grupo(s) detectado(s) — Puedes recuperar
+      <span class="font-semibold text-emerald-600 dark:text-emerald-400">
+        {{ total_recuperable | format_size }}
+      </span>
+      de espacio
+    </p>
+  </div>
+  <button onclick="eliminarTodos()"
+          class="flex items-center gap-2 px-4 py-2 bg-rose-600 hover:bg-rose-700 active:bg-rose-800
+                 text-white rounded-lg text-sm font-medium transition shadow-sm">
+    <i class="fa-solid fa-trash-can"></i> Eliminar todos los duplicados
+  </button>
+</div>
+
+<!-- Group cards -->
+<div class="space-y-3" id="grupos-container">
+  {% for g in grupos %}
+  {% set gid = g.hash[:12] %}
+  <div id="card-{{ gid }}"
+       class="bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 shadow-sm overflow-hidden">
+
+    <!-- Group header -->
+    <div class="flex items-center gap-3 px-4 py-3 cursor-pointer
+                hover:bg-gray-50 dark:hover:bg-gray-800/50 transition select-none"
+         onclick="toggleGroup('{{ gid }}')">
+      <i id="chevron-{{ gid }}"
+         class="fa-solid fa-chevron-down text-gray-400 text-xs transition-transform duration-200"></i>
+      <div class="flex-1 min-w-0 flex items-center gap-2 flex-wrap">
+        <span class="font-medium text-sm text-gray-900 dark:text-white truncate max-w-xs">
+          {{ g.archivos[0].nombre }}
+        </span>
+        <span class="badge bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300 text-xs whitespace-nowrap">
+          {{ g.copias }} copias
+        </span>
+        <span class="badge bg-emerald-50 dark:bg-emerald-950 text-emerald-700
+                     dark:text-emerald-300 text-xs whitespace-nowrap">
+          {{ g.espacio_recuperable | format_size }} recuperable
+        </span>
+      </div>
+      <button onclick="event.stopPropagation(); abrirModalGrupo('{{ g.hash }}')"
+              class="ml-2 flex-shrink-0 flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium
+                     bg-rose-50 dark:bg-rose-950 text-rose-600 dark:text-rose-400
+                     hover:bg-rose-100 dark:hover:bg-rose-900 rounded-lg transition">
+        <i class="fa-solid fa-trash-can"></i> Eliminar seleccionados
+      </button>
+    </div>
+
+    <!-- Group body (file list) -->
+    <div id="body-{{ gid }}"
+         class="divide-y divide-gray-100 dark:divide-gray-800
+                border-t border-gray-100 dark:border-gray-800">
+      {% for a in g.archivos %}
+      <label id="row-{{ a.id }}"
+             class="flex items-start gap-3 px-4 py-3 cursor-pointer transition border-l-4
+                    border-l-transparent
+                    {% if a.id == g.conservar_id %}file-row-keep{% else %}file-row-delete{% endif %}">
+        <input type="radio"
+               name="conservar_{{ g.hash }}"
+               value="{{ a.id }}"
+               {% if a.id == g.conservar_id %}checked{% endif %}
+               class="mt-0.5 accent-emerald-600 flex-shrink-0 cursor-pointer"
+               onchange="onRadioChange('{{ g.hash }}', {{ a.id }})">
+        <div class="flex-1 min-w-0">
+          <div class="font-medium text-sm text-gray-900 dark:text-gray-100 truncate">
+            {{ a.nombre }}
+          </div>
+          <div class="text-xs text-gray-400 dark:text-gray-500 mt-0.5 truncate"
+               title="{{ a.ruta_actual }}">
+            {{ a.ruta_actual }}
+          </div>
+        </div>
+        <div class="text-right text-xs text-gray-500 dark:text-gray-400 flex-shrink-0 min-w-[70px]">
+          <div class="font-medium text-gray-700 dark:text-gray-300">
+            {{ (a.tamaño_bytes or 0) | format_size }}
+          </div>
+          <div class="mt-0.5">{{ (a.fecha_modificacion or '')[:10] }}</div>
+        </div>
+        <div id="badge-{{ a.id }}" class="flex-shrink-0 w-24 flex justify-end">
+          {% if a.id == g.conservar_id %}
+          <span class="badge bg-emerald-100 dark:bg-emerald-900 text-emerald-700
+                       dark:text-emerald-300 text-xs">CONSERVAR</span>
+          {% else %}
+          <span class="badge bg-rose-100 dark:bg-rose-900 text-rose-600
+                       dark:text-rose-400 text-xs">ELIMINAR</span>
+          {% endif %}
+        </div>
+      </label>
+      {% endfor %}
+    </div>
+  </div>
+  {% endfor %}
+</div>
+
+{% endif %}
+
+<!-- Confirmation modal -->
+<div id="modal-overlay"
+     class="hidden fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+  <div class="bg-white dark:bg-gray-900 rounded-2xl shadow-2xl max-w-md w-full
+              border border-gray-200 dark:border-gray-800 p-6">
+    <div class="flex items-center gap-3 mb-4">
+      <div class="w-10 h-10 rounded-full bg-rose-100 dark:bg-rose-950
+                  flex items-center justify-center flex-shrink-0">
+        <i class="fa-solid fa-triangle-exclamation text-rose-500"></i>
+      </div>
+      <div>
+        <h3 class="font-semibold text-gray-900 dark:text-white">Confirmar eliminación</h3>
+        <p class="text-xs text-gray-400">Esta acción se puede deshacer desde Backup &amp; Undo</p>
+      </div>
+    </div>
+    <p id="modal-summary"
+       class="text-sm text-gray-700 dark:text-gray-300 mb-6 leading-relaxed bg-gray-50
+              dark:bg-gray-800 rounded-lg px-4 py-3"></p>
+    <div class="flex gap-3">
+      <button onclick="cerrarModal()"
+              class="flex-1 px-4 py-2 rounded-lg border border-gray-200 dark:border-gray-700
+                     text-sm font-medium text-gray-700 dark:text-gray-300
+                     hover:bg-gray-50 dark:hover:bg-gray-800 transition">
+        Cancelar
+      </button>
+      <button onclick="confirmarEliminar()"
+              id="btn-confirmar"
+              class="flex-1 px-4 py-2 rounded-lg bg-rose-600 hover:bg-rose-700 text-white
+                     text-sm font-medium transition flex items-center justify-center gap-2">
+        <i class="fa-solid fa-trash-can"></i> Confirmar
+      </button>
+    </div>
+  </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+// ── Data from server ──────────────────────────────────────────────────────────
+const grupos = {
+  {% for g in grupos %}
+  {{ g.hash | tojson }}: {
+    archivos: [
+      {% for a in g.archivos %}
+      { id: {{ a.id }}, nombre: {{ a.nombre | tojson }},
+        ruta: {{ a.ruta_actual | tojson }}, tamaño: {{ a.tamaño_bytes or 0 }} },
+      {% endfor %}
+    ]
+  },
+  {% endfor %}
+};
+
+const conservarMap = {
+  {% for g in grupos %}
+  {{ g.hash | tojson }}: {{ g.conservar_id }},
+  {% endfor %}
+};
+
+// ── Size formatter ────────────────────────────────────────────────────────────
+function formatSize(bytes) {
+  if (!bytes) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let i = 0;
+  while (bytes >= 1024 && i < units.length - 1) { bytes /= 1024; i++; }
+  return bytes.toFixed(1) + ' ' + units[i];
+}
+
+// ── Collapse / expand ─────────────────────────────────────────────────────────
+function toggleGroup(gid) {
+  const body = document.getElementById('body-' + gid);
+  const chevron = document.getElementById('chevron-' + gid);
+  if (!body) return;
+  const isHidden = body.style.display === 'none';
+  body.style.display = isHidden ? '' : 'none';
+  chevron.style.transform = isHidden ? '' : 'rotate(-90deg)';
+}
+
+// ── Row styling ───────────────────────────────────────────────────────────────
+function updateRowStyles(hash) {
+  const keepId = conservarMap[hash];
+  const g = grupos[hash];
+  if (!g) return;
+  for (const a of g.archivos) {
+    const row = document.getElementById('row-' + a.id);
+    const badgeEl = document.getElementById('badge-' + a.id);
+    if (!row || !badgeEl) continue;
+    if (a.id === keepId) {
+      row.classList.remove('file-row-delete');
+      row.classList.add('file-row-keep');
+      badgeEl.innerHTML =
+        '<span class="badge bg-emerald-100 dark:bg-emerald-900 text-emerald-700 ' +
+        'dark:text-emerald-300 text-xs">CONSERVAR</span>';
+    } else {
+      row.classList.remove('file-row-keep');
+      row.classList.add('file-row-delete');
+      badgeEl.innerHTML =
+        '<span class="badge bg-rose-100 dark:bg-rose-900 text-rose-600 ' +
+        'dark:text-rose-400 text-xs">ELIMINAR</span>';
+    }
+  }
+}
+
+function onRadioChange(hash, archivoId) {
+  conservarMap[hash] = archivoId;
+  updateRowStyles(hash);
+}
+
+// ── ID helpers ────────────────────────────────────────────────────────────────
+function getEliminarIdsForGroup(hash) {
+  const keepId = conservarMap[hash];
+  return (grupos[hash]?.archivos || [])
+    .filter(a => a.id !== keepId)
+    .map(a => a.id);
+}
+
+function getAllEliminarIds() {
+  return Object.keys(grupos).flatMap(h => getEliminarIdsForGroup(h));
+}
+
+function getTotalBytes(ids) {
+  const allArchivos = Object.values(grupos).flatMap(g => g.archivos);
+  const byId = Object.fromEntries(allArchivos.map(a => [a.id, a]));
+  return ids.reduce((sum, id) => sum + (byId[id]?.tamaño || 0), 0);
+}
+
+// ── Modal ─────────────────────────────────────────────────────────────────────
+let _pendingIds = [];
+
+function abrirModalGrupo(hash) {
+  const ids = getEliminarIdsForGroup(hash);
+  if (ids.length === 0) {
+    showToast('Nada que eliminar en este grupo', 'info');
+    return;
+  }
+  _pendingIds = ids;
+  const total = getTotalBytes(ids);
+  document.getElementById('modal-summary').textContent =
+    'Se moverán ' + ids.length + ' archivo(s) (' + formatSize(total) + ') a la carpeta de backup. ' +
+    'Podrás recuperarlos desde la página Backup & Undo.';
+  document.getElementById('modal-overlay').classList.remove('hidden');
+}
+
+function eliminarTodos() {
+  const ids = getAllEliminarIds();
+  if (ids.length === 0) {
+    showToast('Nada que eliminar', 'info');
+    return;
+  }
+  _pendingIds = ids;
+  const total = getTotalBytes(ids);
+  document.getElementById('modal-summary').textContent =
+    'Se moverán ' + ids.length + ' archivo(s) (' + formatSize(total) + ') a la carpeta de backup. ' +
+    'Podrás recuperarlos desde la página Backup & Undo.';
+  document.getElementById('modal-overlay').classList.remove('hidden');
+}
+
+function cerrarModal() {
+  document.getElementById('modal-overlay').classList.add('hidden');
+  _pendingIds = [];
+}
+
+async function confirmarEliminar() {
+  const btn = document.getElementById('btn-confirmar');
+  btn.disabled = true;
+  btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Procesando…';
+  try {
+    const res = await fetch('/api/duplicados/eliminar', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ eliminar_ids: _pendingIds }),
+    });
+    const data = await res.json();
+    cerrarModal();
+    if (data.ok > 0) {
+      showToast(data.ok + ' archivo(s) movidos al backup', 'success');
+    }
+    if (data.failed > 0) {
+      const errs = (data.errores || []).join('; ');
+      showToast(data.failed + ' error(es): ' + errs, 'error');
+    }
+    setTimeout(() => location.reload(), 1500);
+  } catch (e) {
+    showToast('Error de red al procesar la eliminación', 'error');
+    btn.disabled = false;
+    btn.innerHTML = '<i class="fa-solid fa-trash-can"></i> Confirmar';
+  }
+}
+
+document.getElementById('modal-overlay').addEventListener('click', function (e) {
+  if (e.target === this) cerrarModal();
+});
+</script>
+{% endblock %}
