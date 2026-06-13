@@ -1,0 +1,646 @@
+{% extends "base.html" %}
+{% block title %}Analítica · FileOrganizer AI{% endblock %}
+{% block page_title %}Analítica de disco{% endblock %}
+
+{% block head %}
+<script src="{{ url_for('static', filename='js/chart.umd.min.js') }}"></script>
+<style>
+  .treemap-cell {
+    position: absolute;
+    border-radius: 4px;
+    overflow: hidden;
+    cursor: default;
+    transition: filter 0.12s;
+  }
+  .treemap-cell:hover { filter: brightness(1.18); }
+  .cat-pill {
+    padding: 0.35rem 0.875rem;
+    border-radius: 9999px;
+    font-size: 0.8125rem;
+    font-weight: 500;
+    cursor: pointer;
+    border: 2px solid transparent;
+    transition: all 0.15s;
+    white-space: nowrap;
+  }
+  .cat-pill:hover { filter: brightness(0.92); }
+  .cat-pill.pill-active { border-color: currentColor !important; }
+</style>
+{% endblock %}
+
+{% block content %}
+
+<!-- Page header -->
+<div class="mb-5 flex items-center justify-between">
+  <div>
+    <h1 class="text-xl font-bold text-gray-900 dark:text-white">Analítica de disco</h1>
+    <p class="text-sm text-gray-500 dark:text-gray-400 mt-0.5">
+      Uso del espacio por categoría, antigüedad y carpetas
+    </p>
+  </div>
+  <button onclick="fetchData(_catFilter)"
+          class="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700
+                 text-white rounded-lg text-sm font-medium transition">
+    <i class="fa-solid fa-rotate-right"></i> Actualizar
+  </button>
+</div>
+
+<!-- Category filter pills -->
+<div class="flex flex-wrap gap-2 mb-6 items-center">
+  <span class="text-xs font-medium text-gray-400 dark:text-gray-500 mr-1">Filtrar:</span>
+  <button onclick="fetchData(null)" id="pill-all"
+          class="cat-pill pill-active"
+          style="background:#6366F122;color:#6366F1">
+    <i class="fa-solid fa-layer-group mr-1 text-xs"></i>Todas
+  </button>
+  {% for c in categorias %}
+  <button onclick="fetchData({{ c.id }})" id="pill-{{ c.id }}"
+          class="cat-pill"
+          style="background:{{ c.color }}22;color:{{ c.color }}">
+    {{ c.icono }} {{ c.nombre }}
+  </button>
+  {% endfor %}
+</div>
+
+<!-- KPI cards -->
+<div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-5">
+
+  <div class="bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 p-5">
+    <div class="flex items-center gap-3 mb-3">
+      <div class="w-8 h-8 rounded-lg bg-indigo-100 dark:bg-indigo-950 flex items-center justify-center shrink-0">
+        <i class="fa-solid fa-hard-drive text-indigo-600 dark:text-indigo-400 text-xs"></i>
+      </div>
+      <span class="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide leading-tight">
+        Espacio total
+      </span>
+    </div>
+    <div id="kpi-size" class="text-2xl font-bold text-gray-900 dark:text-white">—</div>
+  </div>
+
+  <div class="bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 p-5">
+    <div class="flex items-center gap-3 mb-3">
+      <div class="w-8 h-8 rounded-lg bg-emerald-100 dark:bg-emerald-950 flex items-center justify-center shrink-0">
+        <i class="fa-solid fa-file text-emerald-600 dark:text-emerald-400 text-xs"></i>
+      </div>
+      <span class="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide leading-tight">
+        Archivos
+      </span>
+    </div>
+    <div id="kpi-count" class="text-2xl font-bold text-gray-900 dark:text-white">—</div>
+  </div>
+
+  <div class="bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 p-5">
+    <div class="flex items-center gap-3 mb-3">
+      <div class="w-8 h-8 rounded-lg bg-orange-100 dark:bg-orange-950 flex items-center justify-center shrink-0">
+        <i class="fa-solid fa-copy text-orange-600 dark:text-orange-400 text-xs"></i>
+      </div>
+      <span class="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide leading-tight">
+        Recuperable (dups)
+      </span>
+    </div>
+    <div id="kpi-dup" class="text-2xl font-bold text-gray-900 dark:text-white">—</div>
+    <a href="/duplicados"
+       class="text-xs text-orange-500 hover:underline mt-1 block">Ver duplicados →</a>
+  </div>
+
+  <div class="bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 p-5">
+    <div class="flex items-center gap-3 mb-3">
+      <div class="w-8 h-8 rounded-lg bg-blue-100 dark:bg-blue-950 flex items-center justify-center shrink-0">
+        <i class="fa-solid fa-snowflake text-blue-600 dark:text-blue-400 text-xs"></i>
+      </div>
+      <span class="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide leading-tight">
+        Archivos fríos (&gt;1 año)
+      </span>
+    </div>
+    <div id="kpi-cold" class="text-2xl font-bold text-gray-900 dark:text-white">—</div>
+    <div id="kpi-cold-sub" class="text-xs text-gray-400 mt-1">sin modificar en &gt;1 año</div>
+  </div>
+
+</div>
+
+<!-- Charts row 1: Donut + Age bars -->
+<div class="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-4">
+
+  <!-- Donut — por categoría -->
+  <div class="bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 p-5">
+    <h3 class="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-1">
+      <i class="fa-solid fa-chart-pie text-indigo-500 mr-1.5"></i>Espacio por categoría
+    </h3>
+    <p class="text-xs text-gray-400 mb-3">Clic en un sector para filtrar las demás gráficas</p>
+    <div class="relative" style="height:270px">
+      <canvas id="chart-donut"></canvas>
+    </div>
+  </div>
+
+  <!-- Bar — distribución por antigüedad -->
+  <div class="bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 p-5">
+    <h3 class="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-1">
+      <i class="fa-solid fa-clock text-amber-500 mr-1.5"></i>Distribución por antigüedad
+    </h3>
+    <p class="text-xs text-gray-400 mb-3">Tamaño acumulado por fecha de última modificación</p>
+    <div class="relative" style="height:270px">
+      <canvas id="chart-age"></canvas>
+    </div>
+  </div>
+
+</div>
+
+<!-- Treemap — mapa de carpetas -->
+<div class="bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 p-5 mb-4">
+  <h3 class="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-1">
+    <i class="fa-solid fa-folder-tree text-emerald-500 mr-1.5"></i>Mapa de espacio — top 15 carpetas
+  </h3>
+  <p class="text-xs text-gray-400 mb-4">Tamaño de cada celda proporcional al espacio que ocupa la carpeta</p>
+  <div id="treemap-container" class="relative w-full rounded-lg overflow-hidden"
+       style="height:240px;background:transparent">
+    <div id="treemap-empty"
+         class="absolute inset-0 flex items-center justify-center text-gray-400 text-sm">
+      <i class="fa-solid fa-chart-area mr-2"></i>Sin datos de carpetas
+    </div>
+  </div>
+</div>
+
+<!-- Charts row 2: Top folders bars + Top files table -->
+<div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+
+  <!-- Horizontal bar — top carpetas -->
+  <div class="bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 p-5">
+    <h3 class="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-1">
+      <i class="fa-solid fa-folder text-yellow-500 mr-1.5"></i>Top 10 carpetas por tamaño
+    </h3>
+    <p class="text-xs text-gray-400 mb-3">Pasa el cursor para ver la ruta completa</p>
+    <div class="relative" style="height:320px">
+      <canvas id="chart-folders"></canvas>
+    </div>
+  </div>
+
+  <!-- Table — top 20 archivos más grandes -->
+  <div class="bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 p-5">
+    <h3 class="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-4">
+      <i class="fa-solid fa-weight-hanging text-rose-500 mr-1.5"></i>Archivos más pesados
+    </h3>
+    <div class="overflow-auto" style="max-height:320px">
+      <table class="w-full text-sm min-w-0">
+        <thead class="sticky top-0 bg-white dark:bg-gray-900 z-10">
+          <tr class="border-b border-gray-100 dark:border-gray-800">
+            <th class="py-2 px-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400">
+              Archivo
+            </th>
+            <th class="py-2 px-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 whitespace-nowrap">
+              Tamaño
+            </th>
+            <th class="py-2 px-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 hidden md:table-cell whitespace-nowrap">
+              Modificado
+            </th>
+          </tr>
+        </thead>
+        <tbody id="top-files-tbody">
+          <tr>
+            <td colspan="3" class="py-10 text-center text-gray-400">
+              <i class="fa-solid fa-spinner fa-spin mr-2"></i>Cargando…
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// ── Palette for treemap cells ─────────────────────────────────────────────────
+const PALETTE = [
+  '#4F46E5','#059669','#D97706','#DC2626','#7C3AED',
+  '#0891B2','#DB2777','#65A30D','#EA580C','#0284C7',
+  '#9333EA','#B45309','#16A34A','#E11D48','#2563EB',
+];
+
+// ── State ─────────────────────────────────────────────────────────────────────
+let _data = null;
+let _catFilter = null;
+const _charts = {};
+
+// ── Utilities ─────────────────────────────────────────────────────────────────
+function formatSize(bytes) {
+  if (!bytes && bytes !== 0) return '—';
+  if (bytes === 0) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let v = bytes, u = 0;
+  while (v >= 1024 && u < units.length - 1) { v /= 1024; u++; }
+  return v.toFixed(1) + ' ' + units[u];
+}
+
+function shortPath(path) {
+  if (!path) return '';
+  const parts = path.replace(/\\/g, '/').split('/').filter(Boolean);
+  return parts.length <= 2 ? parts.join('/') : parts.slice(-2).join('/');
+}
+
+function escHtml(s) {
+  return String(s ?? '')
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+function getTheme() {
+  const dark = document.documentElement.classList.contains('dark');
+  return {
+    text:        dark ? '#E5E7EB' : '#374151',
+    subtext:     dark ? '#9CA3AF' : '#6B7280',
+    grid:        dark ? '#374151' : '#E5E7EB',
+    tooltip:     dark ? '#1F2937' : '#FFFFFF',
+    tooltipText: dark ? '#F9FAFB' : '#111827',
+  };
+}
+
+function makeChart(id, config) {
+  if (_charts[id]) { _charts[id].destroy(); delete _charts[id]; }
+  const canvas = document.getElementById(id);
+  if (!canvas) return null;
+  _charts[id] = new Chart(canvas.getContext('2d'), config);
+  return _charts[id];
+}
+
+// ── Category pills ────────────────────────────────────────────────────────────
+function updatePills(catId) {
+  document.querySelectorAll('.cat-pill').forEach(btn => {
+    btn.classList.remove('pill-active');
+    btn.style.removeProperty('border-color');
+    btn.style.removeProperty('box-shadow');
+  });
+  const active = catId === null
+    ? document.getElementById('pill-all')
+    : document.getElementById('pill-' + catId);
+  if (active) {
+    active.classList.add('pill-active');
+    active.style.borderColor = active.style.color;
+    active.style.boxShadow = '0 0 0 3px ' + active.style.color + '28';
+  }
+}
+
+// ── Data fetch ────────────────────────────────────────────────────────────────
+async function fetchData(catId) {
+  _catFilter = catId;
+  updatePills(catId);
+  const url = catId !== null ? '/api/analytics?categoria_id=' + catId : '/api/analytics';
+  try {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(res.statusText);
+    _data = await res.json();
+    renderAll(_data);
+  } catch (e) {
+    showToast('Error al cargar datos: ' + e.message, 'error');
+  }
+}
+
+// ── Render all ────────────────────────────────────────────────────────────────
+function renderAll(data) {
+  renderKPIs(data);
+  renderDonut(data);
+  renderAgeChart(data);
+  renderTreemap(data);
+  renderFoldersChart(data);
+  renderTopFiles(data);
+}
+
+// ── KPI cards ─────────────────────────────────────────────────────────────────
+function renderKPIs(data) {
+  document.getElementById('kpi-size').textContent  = formatSize(data.totales.bytes);
+  document.getElementById('kpi-count').textContent = (data.totales.archivos || 0).toLocaleString();
+  document.getElementById('kpi-dup').textContent   = formatSize(data.duplicados_bytes);
+
+  const total = data.totales.archivos || 0;
+  const cold  = data.archivos_frios || 0;
+  const pct   = total > 0 ? Math.round((cold / total) * 100) : 0;
+  document.getElementById('kpi-cold').textContent     = pct + '%';
+  document.getElementById('kpi-cold-sub').textContent =
+    cold.toLocaleString() + ' archivos sin modificar en >1 año';
+}
+
+// ── Donut chart ───────────────────────────────────────────────────────────────
+function renderDonut(data) {
+  const theme = getTheme();
+  const cats = data.por_categoria.filter(c => c.bytes > 0);
+
+  makeChart('chart-donut', {
+    type: 'doughnut',
+    data: {
+      labels: cats.map(c => (c.icono || '') + ' ' + c.nombre),
+      datasets: [{
+        data: cats.map(c => c.bytes),
+        backgroundColor: cats.map(c => (c.color || '#9CA3AF') + 'CC'),
+        borderColor:     cats.map(c => c.color || '#9CA3AF'),
+        borderWidth: 2,
+        hoverOffset: 10,
+      }],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      cutout: '60%',
+      plugins: {
+        legend: {
+          position: 'bottom',
+          labels: {
+            color: theme.text, padding: 10,
+            font: { size: 11 }, boxWidth: 12, boxHeight: 12,
+          },
+        },
+        tooltip: {
+          backgroundColor: theme.tooltip,
+          titleColor: theme.tooltipText,
+          bodyColor: theme.subtext,
+          callbacks: {
+            label: ctx => {
+              const c = cats[ctx.dataIndex];
+              return '  ' + formatSize(c.bytes) + '  ·  ' +
+                     (c.count || 0).toLocaleString() + ' archivos';
+            },
+          },
+        },
+      },
+      onClick: (_evt, elements) => {
+        if (!elements.length) return;
+        const catId = cats[elements[0].index].id;
+        fetchData(_catFilter === catId ? null : catId);
+      },
+    },
+  });
+}
+
+// ── Age distribution chart ────────────────────────────────────────────────────
+function renderAgeChart(data) {
+  const theme = getTheme();
+  const items = data.por_antiguedad;
+  const COLORS = ['#10B981','#3B82F6','#8B5CF6','#F59E0B','#EF4444'];
+
+  makeChart('chart-age', {
+    type: 'bar',
+    data: {
+      labels: items.map(i => i.label),
+      datasets: [{
+        label: 'Tamaño',
+        data: items.map(i => i.bytes),
+        backgroundColor: COLORS.map(c => c + 'CC'),
+        borderColor: COLORS,
+        borderWidth: 1,
+        borderRadius: 6,
+        borderSkipped: false,
+      }],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          backgroundColor: theme.tooltip,
+          titleColor: theme.tooltipText,
+          bodyColor: theme.subtext,
+          callbacks: {
+            label: ctx => {
+              const item = items[ctx.dataIndex];
+              return '  ' + formatSize(ctx.raw) + '  ·  ' +
+                     (item.count || 0).toLocaleString() + ' archivos';
+            },
+          },
+        },
+      },
+      scales: {
+        x: {
+          ticks: { color: theme.subtext, font: { size: 11 } },
+          grid:  { color: theme.grid },
+        },
+        y: {
+          ticks: {
+            color: theme.subtext,
+            font: { size: 11 },
+            callback: v => formatSize(v),
+          },
+          grid: { color: theme.grid },
+        },
+      },
+    },
+  });
+}
+
+// ── Top folders horizontal bar chart ─────────────────────────────────────────
+function renderFoldersChart(data) {
+  const theme = getTheme();
+  const items = data.top_carpetas.slice(0, 10);
+
+  makeChart('chart-folders', {
+    type: 'bar',
+    data: {
+      labels: items.map(i => shortPath(i.folder)),
+      datasets: [{
+        label: 'Tamaño',
+        data: items.map(i => i.bytes),
+        backgroundColor: '#4F46E5CC',
+        borderColor: '#4F46E5',
+        borderWidth: 1,
+        borderRadius: 4,
+      }],
+    },
+    options: {
+      indexAxis: 'y',
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          backgroundColor: theme.tooltip,
+          titleColor: theme.tooltipText,
+          bodyColor: theme.subtext,
+          callbacks: {
+            title: ctx => items[ctx[0].dataIndex].folder,
+            label: ctx => {
+              const item = items[ctx.dataIndex];
+              return '  ' + formatSize(ctx.raw) + '  ·  ' +
+                     (item.count || 0).toLocaleString() + ' archivos';
+            },
+          },
+        },
+      },
+      scales: {
+        x: {
+          ticks: {
+            color: theme.subtext,
+            font: { size: 11 },
+            callback: v => formatSize(v),
+          },
+          grid: { color: theme.grid },
+        },
+        y: {
+          ticks: { color: theme.subtext, font: { size: 11 } },
+          grid: { display: false },
+        },
+      },
+    },
+  });
+}
+
+// ── Squarified treemap layout algorithm ──────────────────────────────────────
+function squarify(items, x, y, W, H) {
+  if (!items.length) return [];
+  const result = [];
+
+  function worstRatio(row, w) {
+    const s = row.reduce((a, i) => a + i.area, 0);
+    const d = s / w;
+    return row.reduce((max, i) => {
+      const od = i.area / d;
+      return Math.max(max, d > od ? d / od : od / d);
+    }, 0);
+  }
+
+  let remaining = [...items];
+  let rx = x, ry = y, rw = W, rh = H;
+
+  while (remaining.length > 0) {
+    const w = Math.min(rw, rh);
+    const row = [];
+    let prev = Infinity;
+
+    for (let i = 0; i < remaining.length; i++) {
+      const candidate = [...row, remaining[i]];
+      const curr = worstRatio(candidate, w);
+      if (row.length > 0 && curr > prev) break;
+      row.push(remaining[i]);
+      prev = curr;
+    }
+    remaining = remaining.slice(row.length);
+
+    const rowArea = row.reduce((s, i) => s + i.area, 0);
+    const isH     = rw >= rh;
+    const rowSize  = rowArea / (isH ? rh : rw);
+    let pos        = isH ? ry : rx;
+
+    for (const item of row) {
+      const sz = item.area / rowSize;
+      if (isH) {
+        result.push({ ...item, x: rx, y: pos, w: rowSize, h: sz });
+        pos += sz;
+      } else {
+        result.push({ ...item, x: pos, y: ry, w: sz, h: rowSize });
+        pos += sz;
+      }
+    }
+
+    if (isH) { rx += rowSize; rw -= rowSize; }
+    else      { ry += rowSize; rh -= rowSize; }
+
+    if (rw < 0.5 || rh < 0.5) break;
+  }
+  return result;
+}
+
+// ── Treemap render ────────────────────────────────────────────────────────────
+function renderTreemap(data) {
+  const container = document.getElementById('treemap-container');
+  const emptyMsg  = document.getElementById('treemap-empty');
+  if (!container) return;
+
+  // Remove previous cells (keep the empty message div)
+  Array.from(container.children)
+    .filter(el => el.id !== 'treemap-empty')
+    .forEach(el => el.remove());
+
+  const items = data.top_carpetas.filter(i => i.bytes > 0);
+  if (!items.length) {
+    if (emptyMsg) emptyMsg.style.display = 'flex';
+    return;
+  }
+  if (emptyMsg) emptyMsg.style.display = 'none';
+
+  const W = container.clientWidth;
+  const H = container.clientHeight;
+  if (W <= 0 || H <= 0) return;
+
+  const total = items.reduce((s, i) => s + i.bytes, 0);
+  const scale = (W * H) / total;
+
+  const scaled = items
+    .map((item, idx) => ({ ...item, area: item.bytes * scale, color: PALETTE[idx % PALETTE.length] }))
+    .sort((a, b) => b.area - a.area);
+
+  const rects = squarify(scaled, 0, 0, W, H);
+
+  for (const r of rects) {
+    if (r.w < 3 || r.h < 3) continue;
+    const div = document.createElement('div');
+    div.className = 'treemap-cell';
+    Object.assign(div.style, {
+      left:       r.x + 'px',
+      top:        r.y + 'px',
+      width:      Math.max(0, r.w - 2) + 'px',
+      height:     Math.max(0, r.h - 2) + 'px',
+      background: r.color,
+    });
+    div.title = r.folder + '\n' + formatSize(r.bytes) + ' · ' +
+                (r.count || 0).toLocaleString() + ' archivos';
+
+    if (r.h >= 30 && r.w >= 55) {
+      const name = document.createElement('div');
+      name.style.cssText =
+        'font-size:11px;font-weight:600;color:#fff;white-space:nowrap;overflow:hidden;' +
+        'text-overflow:ellipsis;text-shadow:0 1px 3px rgba(0,0,0,.55);padding:5px 6px 0;';
+      name.textContent = shortPath(r.folder);
+      div.appendChild(name);
+
+      if (r.h >= 50) {
+        const sz = document.createElement('div');
+        sz.style.cssText = 'font-size:10px;color:rgba(255,255,255,.78);padding:1px 6px;';
+        sz.textContent = formatSize(r.bytes);
+        div.appendChild(sz);
+      }
+    }
+    container.appendChild(div);
+  }
+}
+
+// ── Top files table ───────────────────────────────────────────────────────────
+function renderTopFiles(data) {
+  const tbody = document.getElementById('top-files-tbody');
+  if (!tbody) return;
+
+  if (!data.top_archivos.length) {
+    tbody.innerHTML =
+      '<tr><td colspan="3" class="py-10 text-center text-gray-400">Sin archivos</td></tr>';
+    return;
+  }
+
+  tbody.innerHTML = data.top_archivos.map(f => `
+    <tr class="border-b border-gray-50 dark:border-gray-800/50
+               hover:bg-gray-50 dark:hover:bg-gray-800/40 transition-colors">
+      <td class="py-2 px-3 min-w-0">
+        <a href="/archivo/${f.id}"
+           class="font-medium text-indigo-600 dark:text-indigo-400 hover:underline
+                  text-sm truncate block"
+           title="${escHtml(f.nombre)}">${escHtml(f.nombre)}</a>
+        ${f.cat_nombre
+          ? `<span class="text-xs" style="color:${escHtml(f.cat_color || '#9CA3AF')}">${escHtml(f.cat_nombre)}</span>`
+          : ''}
+      </td>
+      <td class="py-2 px-3 text-right text-sm font-semibold
+                 text-gray-800 dark:text-gray-200 whitespace-nowrap">
+        ${formatSize(f.tamaño_bytes)}
+      </td>
+      <td class="py-2 px-3 text-right text-xs text-gray-400
+                 hidden md:table-cell whitespace-nowrap">
+        ${escHtml((f.fecha_modificacion || '').slice(0, 10))}
+      </td>
+    </tr>
+  `).join('');
+}
+
+// ── Dark-mode observer: redraw charts when theme toggles ──────────────────────
+new MutationObserver(() => { if (_data) renderAll(_data); })
+  .observe(document.documentElement, { attributeFilter: ['class'] });
+
+// ── Boot ──────────────────────────────────────────────────────────────────────
+document.addEventListener('DOMContentLoaded', () => fetchData(null));
+</script>
+{% endblock %}

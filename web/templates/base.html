@@ -86,6 +86,9 @@
       <a href="/renombrar" class="nav-link {% if '/renombrar' in request.path %}active{% endif %}">
         <i class="fa-solid fa-pen-to-square w-4 text-center text-sky-500"></i> Renombrar
       </a>
+      <a href="/dashboard" class="nav-link {% if request.path == '/dashboard' %}active{% endif %}">
+        <i class="fa-solid fa-chart-pie w-4 text-center text-purple-500"></i> Analítica
+      </a>
       <a href="/historial" class="nav-link {% if '/historial' in request.path %}active{% endif %}">
         <i class="fa-solid fa-clock-rotate-left w-4 text-center text-amber-500"></i> Historial
       </a>

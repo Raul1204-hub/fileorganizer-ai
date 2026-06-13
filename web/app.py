@@ -880,6 +880,22 @@ def api_aplicar_renombrado():
     )
 
 
+# ── Analítica de disco ────────────────────────────────────────────────────────
+
+
+@app.route("/dashboard")
+def dashboard():
+    categorias = database.get_categorias()
+    return render_template("dashboard.html", categorias=categorias)
+
+
+@app.route("/api/analytics")
+def api_analytics():
+    raw = request.args.get("categoria_id", "")
+    categoria_id = int(raw) if raw.isdigit() else None
+    return jsonify(database.get_analytics_stats(categoria_id))
+
+
 # ── Stats & recommendations API ───────────────────────────────────────────────
 
 

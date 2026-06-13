@@ -850,6 +850,144 @@ def update_archivo_nombre_y_ruta(archivo_id: int, nuevo_nombre: str, nueva_ruta:
     conn.close()
 
 
+# ── Analítica de disco ────────────────────────────────────────────────────────
+
+
+def get_analytics_stats(categoria_id: int | None = None) -> dict:
+    """Aggregated disk-usage stats for the analytics dashboard.
+
+    All queries use GROUP BY — never returns per-file rows to the caller.
+    Safe at 100k rows.  categoria_id filters totals, top files, age buckets,
+    and top folders; por_categoria always returns the full breakdown.
+    """
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cat_filter = "AND a.categoria_id = ?" if categoria_id else ""
+    params: list = [categoria_id] if categoria_id else []
+
+    # ── Totales ────────────────────────────────────────────────────────────────
+    cur.execute(
+        f"SELECT COUNT(*) AS archivos, COALESCE(SUM(tamaño_bytes), 0) AS bytes "
+        f"FROM archivos a WHERE a.existe = 1 {cat_filter}",
+        params,
+    )
+    totales_row = dict(cur.fetchone())
+
+    # ── Por categoría (always full breakdown — acts as the filter selector) ────
+    cur.execute(
+        """SELECT c.id, c.nombre, c.color, c.icono,
+                  COUNT(a.id) AS count,
+                  COALESCE(SUM(a.tamaño_bytes), 0) AS bytes
+           FROM categorias c
+           LEFT JOIN archivos a ON a.categoria_id = c.id AND a.existe = 1
+           GROUP BY c.id, c.nombre, c.color, c.icono
+           ORDER BY bytes DESC"""
+    )
+    por_categoria = [dict(r) for r in cur.fetchall()]
+
+    # ── Top 20 largest files ───────────────────────────────────────────────────
+    cur.execute(
+        f"""SELECT a.id, a.nombre, a.ruta_actual, a.tamaño_bytes, a.fecha_modificacion,
+                   c.nombre AS cat_nombre, c.color AS cat_color
+            FROM archivos a
+            LEFT JOIN categorias c ON a.categoria_id = c.id
+            WHERE a.existe = 1 {cat_filter}
+            ORDER BY a.tamaño_bytes DESC LIMIT 20""",
+        params,
+    )
+    top_archivos = [dict(r) for r in cur.fetchall()]
+
+    # ── Age distribution (5 fixed buckets by fecha_modificacion) ──────────────
+    cur.execute(
+        f"""SELECT
+              CASE
+                WHEN julianday('now') - julianday(fecha_modificacion) < 30   THEN '<1m'
+                WHEN julianday('now') - julianday(fecha_modificacion) < 180  THEN '1-6m'
+                WHEN julianday('now') - julianday(fecha_modificacion) < 365  THEN '6-12m'
+                WHEN julianday('now') - julianday(fecha_modificacion) < 1095 THEN '1-3a'
+                ELSE '>3a'
+              END AS bucket,
+              COUNT(*) AS count,
+              COALESCE(SUM(tamaño_bytes), 0) AS bytes
+            FROM archivos a
+            WHERE a.existe = 1 {cat_filter}
+              AND a.fecha_modificacion IS NOT NULL
+            GROUP BY bucket""",
+        params,
+    )
+    raw_age = {r["bucket"]: dict(r) for r in cur.fetchall()}
+    bucket_defs = [
+        ("<1m", "< 1 mes"),
+        ("1-6m", "1–6 meses"),
+        ("6-12m", "6–12 meses"),
+        ("1-3a", "1–3 años"),
+        (">3a", "> 3 años"),
+    ]
+    por_antiguedad = [
+        {
+            "bucket": k,
+            "label": lbl,
+            "count": raw_age.get(k, {}).get("count", 0),
+            "bytes": raw_age.get(k, {}).get("bytes", 0),
+        }
+        for k, lbl in bucket_defs
+    ]
+
+    # ── Top 15 folders — parent dir extracted from ruta_actual via SUBSTR ─────
+    cur.execute(
+        f"""SELECT
+              SUBSTR(a.ruta_actual, 1,
+                     LENGTH(a.ruta_actual) - LENGTH(a.nombre) - 1) AS folder,
+              COUNT(*) AS count,
+              COALESCE(SUM(a.tamaño_bytes), 0) AS bytes
+            FROM archivos a
+            WHERE a.existe = 1 {cat_filter}
+              AND a.nombre IS NOT NULL AND a.nombre != ''
+              AND LENGTH(a.ruta_actual) > LENGTH(a.nombre) + 1
+            GROUP BY folder
+            ORDER BY bytes DESC
+            LIMIT 15""",
+        params,
+    )
+    top_carpetas = [dict(r) for r in cur.fetchall()]
+
+    # ── Recoverable bytes from duplicates (always global — not filtered) ───────
+    cur.execute(
+        """SELECT COALESCE(SUM((cnt - 1) * tamaño), 0) AS dup_bytes
+           FROM (
+             SELECT hash_blake2, COUNT(*) AS cnt, MAX(tamaño_bytes) AS tamaño
+             FROM archivos
+             WHERE hash_blake2 != '' AND hash_blake2 IS NOT NULL AND existe = 1
+             GROUP BY hash_blake2
+             HAVING cnt > 1
+           )"""
+    )
+    dup_bytes = (cur.fetchone() or {"dup_bytes": 0})["dup_bytes"] or 0
+
+    # ── Cold files count (modified > 1 year ago) ───────────────────────────────
+    cur.execute(
+        f"""SELECT COUNT(*) AS cnt FROM archivos a
+            WHERE a.existe = 1 {cat_filter}
+              AND a.fecha_modificacion IS NOT NULL
+              AND julianday('now') - julianday(fecha_modificacion) > 365""",
+        params,
+    )
+    cold_count = (cur.fetchone() or {"cnt": 0})["cnt"]
+
+    conn.close()
+
+    return {
+        "totales": {"archivos": totales_row["archivos"], "bytes": totales_row["bytes"]},
+        "por_categoria": por_categoria,
+        "top_archivos": top_archivos,
+        "por_antiguedad": por_antiguedad,
+        "top_carpetas": top_carpetas,
+        "duplicados_bytes": int(dup_bytes),
+        "archivos_frios": cold_count,
+    }
+
+
 def descartar_recomendaciones_por_archivo_ids(archivo_ids: list[int]) -> None:
     """Discard all R1 (duplicate) recommendations for the given file IDs."""
     if not archivo_ids:
