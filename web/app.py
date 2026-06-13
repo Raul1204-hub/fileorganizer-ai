@@ -43,7 +43,7 @@ class _ScanState:
     def __init__(self):
         self.running = False
         self.cancelled = False
-        self.fase = "idle"  # idle|escaneando|analizando|recomendaciones|completado|error
+        self.fase = "idle"  # idle|escaneando|hasheando|analizando|recomendaciones|completado|error
         self.hechos = 0
         self.total = 0
         self.archivo_actual = ""
@@ -59,6 +59,12 @@ class _ScanState:
         self.analizados = 0
         self.fallos_extraccion = 0
         self.fallos_ollama = 0
+        # Detailed progress log (capped at 200 entries)
+        self.log_lines: list[dict] = []   # [{ts, level, msg}]
+        # Stats snapshot for the expanded panel
+        self.stats_detail: dict = {}
+        self.speed_per_min: float = 0.0
+        self._t_scan_start: float = 0.0   # absolute time when scan started
 
 
 _ss = _ScanState()
@@ -81,12 +87,26 @@ def _snapshot() -> dict:
             "analizados": _ss.analizados,
             "fallos_extraccion": _ss.fallos_extraccion,
             "fallos_ollama": _ss.fallos_ollama,
+            # Detailed progress for expanded panel
+            "log_lines": list(_ss.log_lines[-50:]),
+            "stats_detail": dict(_ss.stats_detail),
+            "speed_per_min": round(_ss.speed_per_min, 2),
             # Legacy fields kept for backwards compat
             "status": _ss.fase,
             "progress": _ss.hechos,
             "current_file": _ss.archivo_actual,
             "error": _ss.errores[-1] if _ss.errores else None,
         }
+
+
+def _log_scan(level: str, msg: str) -> None:
+    """Append a timestamped log line to the scan state (thread-safe, capped at 200)."""
+    from datetime import datetime as _dt
+    entry = {"ts": _dt.now().strftime("%H:%M:%S"), "level": level, "msg": msg}
+    with _lock:
+        _ss.log_lines.append(entry)
+        if len(_ss.log_lines) > 200:
+            _ss.log_lines = _ss.log_lines[-200:]
 
 
 # ── Template helpers ──────────────────────────────────────────────────────────
@@ -325,6 +345,7 @@ def _run_scan(target_path: str):
         _ss.total = 0
         _ss.archivo_actual = ""
         _ss.t_inicio_fase = time.monotonic()
+        _ss._t_scan_start = time.monotonic()
         _ss.eta_segundos = -1.0
         _ss.errores.clear()
         _ss.summary.clear()
@@ -334,17 +355,30 @@ def _run_scan(target_path: str):
         _ss.analizados = 0
         _ss.fallos_extraccion = 0
         _ss.fallos_ollama = 0
+        _ss.log_lines.clear()
+        _ss.stats_detail.clear()
+        _ss.speed_per_min = 0.0
 
     try:
-        # ── Phase 1: fast stat-only disk scan ─────────────────────────────────
+        _log_scan("info", f"Iniciando escaneo de: {target_path}")
+
+        # ── Phase 1: fast parallel stat-only disk scan ────────────────────────
+        _t0_scan = time.monotonic()
+
         def _cb_fast(done, total, filename):
             with _lock:
                 _ss.hechos = done
                 _ss.total = total
                 _ss.archivo_actual = filename
 
-        disk_files = scanner.scan_directory_fast(target_path, progress_callback=_cb_fast)
+        disk_files = scanner.scan_directory_fast(
+            target_path,
+            progress_callback=_cb_fast,
+            is_cancelled=lambda: _ss.cancelled,
+        )
+        _elapsed_scan = time.monotonic() - _t0_scan
         disk_paths = {f["ruta_actual"] for f in disk_files}
+        _log_scan("ok", f"Disco: {len(disk_files):,} archivos encontrados en {_elapsed_scan:.1f}s")
 
         # ── Reconcile disk vs DB ──────────────────────────────────────────────
         db_index = database.get_all_archivos_indexed()
@@ -375,6 +409,21 @@ def _run_scan(target_path: str):
         for aid in disappeared_ids:
             database.mark_archivo_desaparecido(aid)
 
+        _log_scan(
+            "info",
+            f"Reconciliación: {len(new_files):,} nuevos · {len(modified):,} modificados"
+            f" · {len(unchanged):,} sin cambios · {len(disappeared_ids):,} desaparecidos",
+        )
+        with _lock:
+            _ss.stats_detail = {
+                "nuevos": len(new_files),
+                "modificados": len(modified),
+                "sin_cambios": len(unchanged),
+                "desaparecidos": len(disappeared_ids),
+                "cache_hits": 0,
+                "errores": 0,
+            }
+
         # ── Smart BLAKE2b hashing (selective: docs always; non-docs only if
         #    size-duplicate exists; 8 KB prefix compare before full hash) ──────
         candidates = [*new_files, *modified]
@@ -382,16 +431,25 @@ def _run_scan(target_path: str):
         n_hashed = 0
 
         with _lock:
+            _ss.fase = "hasheando"
             _ss.hechos = 0
             _ss.total = n_candidates
             _ss.archivo_actual = ""
             _ss.eta_segundos = -1.0
+            _ss.t_inicio_fase = time.monotonic()
+
+        _log_scan("info", f"Hasheando {n_candidates:,} candidatos (paralelo)…")
+        _t0_hash = time.monotonic()
 
         def _on_hash_progress(ruta: str, hashed: bool):
             nonlocal n_hashed
             with _lock:
                 _ss.hechos += 1
                 _ss.archivo_actual = Path(ruta).name
+                # Update speed (files per minute)
+                elapsed = time.monotonic() - _ss.t_inicio_fase
+                if elapsed > 0:
+                    _ss.speed_per_min = (_ss.hechos / elapsed) * 60
             if hashed:
                 n_hashed += 1
 
@@ -401,6 +459,13 @@ def _run_scan(target_path: str):
             on_progress=_on_hash_progress,
             is_cancelled=lambda: _ss.cancelled,
         )
+        _elapsed_hash = time.monotonic() - _t0_hash
+        savings_skip = n_candidates - n_hashed
+        _log_scan(
+            "ok",
+            f"Hashing completo: {n_hashed:,} hasheados, {savings_skip:,} omitidos"
+            f" en {_elapsed_hash:.1f}s",
+        )
 
         # ── Check optional models once (vision + embed) ───────────────────────
         _vision_check = ollama_client.check_ollama([VISION_MODEL])
@@ -408,46 +473,62 @@ def _run_scan(target_path: str):
         if not _vision_available:
             _wlog.warning("vision model '%s' not available — image analysis skipped", VISION_MODEL)
 
-        # ── Insert new files ──────────────────────────────────────────────────
+        # ── Insert new files (batch) ──────────────────────────────────────────
         cache_hits = 0
         to_analyze: dict[str, int] = {}
 
-        for f in new_files:
-            if _ss.cancelled:
-                break
-            h = hash_map[f["ruta_actual"]]
-            aid = database.insert_archivo(
-                nombre=f["nombre"],
-                extension=f["extension"],
-                ruta_actual=f["ruta_actual"],
-                tamaño_bytes=f["tamaño_bytes"],
-                fecha_modificacion=f["fecha_modificacion"],
-                hash_blake2=h,
-                categoria_id=f["categoria_id"],
-                fecha_acceso=f.get("fecha_acceso"),
-                fecha_creacion=f.get("fecha_creacion"),
-            )
-            database.insert_historial(aid, None, f["ruta_actual"], "indexar")
-            if f["extension"] in scanner.DOC_EXTS:
-                if h:
-                    cached = database.get_resumen_by_hash(h)
-                    if cached and cached["resumen_ia"]:
-                        database.update_archivo_resumen(aid, cached["resumen_ia"])
-                        database.copy_etiquetas(cached["id"], aid)
-                        cache_hits += 1
+        if new_files and not _ss.cancelled:
+            _log_scan("info", f"Insertando {len(new_files):,} archivos nuevos en BD…")
+            # Build batch rows
+            batch_rows = [
+                {
+                    "nombre": f["nombre"],
+                    "extension": f["extension"],
+                    "ruta_actual": f["ruta_actual"],
+                    "tamaño_bytes": f["tamaño_bytes"],
+                    "fecha_modificacion": f["fecha_modificacion"],
+                    "hash_blake2": hash_map.get(f["ruta_actual"], ""),
+                    "categoria_id": f["categoria_id"],
+                    "fecha_acceso": f.get("fecha_acceso"),
+                    "fecha_creacion": f.get("fecha_creacion"),
+                }
+                for f in new_files
+            ]
+            new_ids = database.insert_archivos_batch(batch_rows)
+
+            # Batch historial insert
+            historial_entries = [(aid, None, f["ruta_actual"], "indexar") for aid, f in zip(new_ids, new_files)]
+            database.insert_historial_batch(historial_entries)
+
+            # Post-insert: cache lookup and queue for analysis
+            for f, aid in zip(new_files, new_ids):
+                if _ss.cancelled:
+                    break
+                h = hash_map.get(f["ruta_actual"], "")
+                if f["extension"] in scanner.DOC_EXTS:
+                    if h:
+                        cached = database.get_resumen_by_hash(h)
+                        if cached and cached["resumen_ia"]:
+                            database.update_archivo_resumen(aid, cached["resumen_ia"])
+                            database.copy_etiquetas(cached["id"], aid)
+                            cache_hits += 1
+                        else:
+                            to_analyze[f["ruta_actual"]] = aid
                     else:
                         to_analyze[f["ruta_actual"]] = aid
-                else:
-                    to_analyze[f["ruta_actual"]] = aid
-            elif f["extension"] in scanner.IMG_EXTS and _vision_available:
-                if f["tamaño_bytes"] <= VISION_MAX_MB * 1024 * 1024:
-                    to_analyze[f["ruta_actual"]] = aid
+                elif f["extension"] in scanner.IMG_EXTS and _vision_available:
+                    if f["tamaño_bytes"] <= VISION_MAX_MB * 1024 * 1024:
+                        to_analyze[f["ruta_actual"]] = aid
+
+            _log_scan("ok", f"{len(new_files):,} archivos nuevos insertados · {cache_hits} caché hits")
 
         # ── Update modified files ─────────────────────────────────────────────
+        if modified and not _ss.cancelled:
+            _log_scan("info", f"Actualizando {len(modified):,} archivos modificados…")
         for f in modified:
             if _ss.cancelled:
                 break
-            h = hash_map[f["ruta_actual"]]
+            h = hash_map.get(f["ruta_actual"], "")
             database.update_archivo_full(
                 archivo_id=f["db_id"],
                 nombre=f["nombre"],
@@ -477,6 +558,9 @@ def _run_scan(target_path: str):
             elif f["extension"] in scanner.IMG_EXTS and _vision_available:
                 if f["tamaño_bytes"] <= VISION_MAX_MB * 1024 * 1024:
                     to_analyze[f["ruta_actual"]] = f["db_id"]
+        # Update stats_detail with cache hits so far
+        with _lock:
+            _ss.stats_detail["cache_hits"] = cache_hits
 
         # ── Analysis phase (Ollama, weighted EMA) ─────────────────────────────
         # Check embed model once before the loop; missing it is non-fatal
@@ -484,6 +568,12 @@ def _run_scan(target_path: str):
         _embed_available = _embed_check["running"] and not _embed_check["missing"]
         if not _embed_available:
             _wlog.warning("embed model '%s' not available — embeddings skipped this scan", EMBED_MODEL)
+
+        _log_scan(
+            "info",
+            f"Análisis IA: {len(to_analyze):,} archivos en cola"
+            + (f" · modelo embed no disponible" if not _embed_available else ""),
+        )
 
         with _lock:
             _ss.fase = "analizando"
@@ -527,6 +617,15 @@ def _run_scan(target_path: str):
                     _ss.eta_segundos = _ss.ema_anal_spc * _ss.avg_chars * remaining
                 elif remaining == 0:
                     _ss.eta_segundos = 0.0
+                # Update speed
+                phase_elapsed = time.monotonic() - _ss.t_inicio_fase
+                if phase_elapsed > 0:
+                    _ss.speed_per_min = (_ss.hechos / phase_elapsed) * 60
+
+            if result:
+                _log_scan("ok", f"Analizado: {Path(ruta).name} ({elapsed:.1f}s · {text_len:,} chars)")
+            else:
+                _log_scan("warn", f"Sin resultado: {Path(ruta).name}")
 
             if result:
                 cat_id = scanner.CATEGORIA_IDS.get(result.get("categoria", ""), None)
@@ -547,6 +646,7 @@ def _run_scan(target_path: str):
 
         # ── Recommendations phase ─────────────────────────────────────────────
         if not _ss.cancelled:
+            _log_scan("info", "Generando recomendaciones…")
             with _lock:
                 _ss.fase = "recomendaciones"
                 _ss.hechos = 0
@@ -555,6 +655,7 @@ def _run_scan(target_path: str):
                 _ss.eta_segundos = -1.0
             database.clear_recomendaciones()
             recommendations.run_all_rules()
+            _log_scan("ok", "Recomendaciones generadas")
 
         # ── Complete ──────────────────────────────────────────────────────────
         with _lock:
@@ -562,6 +663,7 @@ def _run_scan(target_path: str):
             _ss.eta_segundos = 0.0
             savings_pct = round(100 * (1 - n_hashed / max(n_candidates, 1)))
             total_fallos = _ss.fallos_extraccion + _ss.fallos_ollama
+            total_elapsed = time.monotonic() - _ss._t_scan_start
             _ss.summary = {
                 "unchanged": len(unchanged),
                 "new": len(new_files),
@@ -576,6 +678,10 @@ def _run_scan(target_path: str):
                 "fallos_extraccion": _ss.fallos_extraccion,
                 "fallos_ollama": _ss.fallos_ollama,
             }
+            _ss.stats_detail.update({
+                "cache_hits": cache_hits,
+                "errores": total_fallos,
+            })
             _wlog.info(
                 "Scan complete — analizados=%d, fallidos=%d (extracción=%d, Ollama=%d)"
                 " — detalle en logs/fileorganizer.log",
@@ -584,12 +690,19 @@ def _run_scan(target_path: str):
                 _ss.fallos_extraccion,
                 _ss.fallos_ollama,
             )
+        _log_scan(
+            "ok",
+            f"Escaneo completado en {total_elapsed:.1f}s"
+            f" — {_ss.analizados} analizados · {total_fallos} fallos"
+            f" · {savings_pct}% hashing omitido",
+        )
 
     except Exception as exc:
         err = f"{type(exc).__name__}: {exc}"
         with _lock:
             _ss.errores.append(err)
             _ss.fase = "error"
+        _log_scan("error", f"Error fatal: {err}")
 
     finally:
         with _lock:

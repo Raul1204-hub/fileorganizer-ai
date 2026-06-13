@@ -252,6 +252,73 @@ def insert_archivo(
     return archivo_id
 
 
+def insert_archivos_batch(files: list[dict]) -> list[int]:
+    """Batch-insert multiple archivos rows.
+
+    Each dict must have keys: nombre, extension, ruta_actual, tamaño_bytes,
+    fecha_modificacion, hash_blake2, categoria_id, fecha_acceso, fecha_creacion.
+    Returns list of inserted IDs in the same order as ``files``.
+    """
+    if not files:
+        return []
+    now = datetime.now().isoformat()
+    conn = get_connection()
+    cur = conn.cursor()
+    ids: list[int] = []
+    for f in files:
+        cur.execute(
+            """INSERT INTO archivos
+               (nombre, extension, ruta_actual, tamaño_bytes, fecha_modificacion,
+                fecha_indexado, hash_blake2, categoria_id,
+                fecha_acceso, fecha_creacion)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                f["nombre"],
+                f["extension"],
+                str(f["ruta_actual"]),
+                f["tamaño_bytes"],
+                f["fecha_modificacion"],
+                now,
+                f.get("hash_blake2", ""),
+                f["categoria_id"],
+                f.get("fecha_acceso"),
+                f.get("fecha_creacion"),
+            ),
+        )
+        ids.append(cur.lastrowid)
+    conn.commit()
+    conn.close()
+    return ids
+
+
+def insert_historial_batch(entries: list[tuple]) -> None:
+    """Batch-insert multiple historial rows.
+
+    Each tuple: (archivo_id, ruta_origen, ruta_destino, operacion).
+    """
+    if not entries:
+        return
+    now = datetime.now().isoformat()
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.executemany(
+        """INSERT INTO historial (archivo_id, ruta_origen, ruta_destino, operacion, fecha, revertido)
+           VALUES (?, ?, ?, ?, ?, 0)""",
+        [
+            (
+                e[0],
+                str(e[1]) if e[1] else None,
+                str(e[2]) if e[2] else None,
+                e[3],
+                now,
+            )
+            for e in entries
+        ],
+    )
+    conn.commit()
+    conn.close()
+
+
 def get_archivo(archivo_id):
     conn = get_connection()
     cur = conn.cursor()

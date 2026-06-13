@@ -1,5 +1,6 @@
 import hashlib
 from collections import Counter, defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
 
@@ -121,6 +122,7 @@ def smart_hash_files(
     all_disk_files: list[dict],
     on_progress=None,  # on_progress(ruta: str, hashed: bool) — called per candidate
     is_cancelled=None,  # is_cancelled() -> bool
+    max_workers: int = 6,
 ) -> dict[str, str]:
     """Selective BLAKE2b hashing. Returns {ruta_actual: hex_or_empty}.
 
@@ -145,17 +147,17 @@ def smart_hash_files(
     for f in candidates:
         by_size[f["tamaño_bytes"]].append(f)
 
+    # Collect the set of paths that need a full hash and which ones can be skipped
+    to_hash: list[str] = []       # rutas that WILL be hashed
+    to_skip: list[str] = []       # rutas that won't be hashed (result stays "")
+
     for size, group in by_size.items():
         docs = [f for f in group if f["extension"] in DOC_EXTS]
         non_docs = [f for f in group if f["extension"] not in DOC_EXTS]
 
         # Documents → always hash
         for f in docs:
-            if is_cancelled and is_cancelled():
-                return result
-            result[f["ruta_actual"]] = compute_blake2b(Path(f["ruta_actual"]))
-            if on_progress:
-                on_progress(f["ruta_actual"], True)
+            to_hash.append(f["ruta_actual"])
 
         if not non_docs:
             continue
@@ -163,8 +165,7 @@ def smart_hash_files(
         if size_freq[size] < 2:
             # Unique size across entire disk scan → no duplicate possible
             for f in non_docs:
-                if on_progress:
-                    on_progress(f["ruta_actual"], False)
+                to_skip.append(f["ruta_actual"])
             continue
 
         # Unchanged files (already in DB) that share this size
@@ -172,12 +173,7 @@ def smart_hash_files(
 
         if len(non_docs) == 1:
             # Single candidate whose size also exists in DB → hash to allow comparison
-            f = non_docs[0]
-            if is_cancelled and is_cancelled():
-                return result
-            result[f["ruta_actual"]] = compute_blake2b(Path(f["ruta_actual"]))
-            if on_progress:
-                on_progress(f["ruta_actual"], True)
+            to_hash.append(non_docs[0]["ruta_actual"])
             continue
 
         # 2+ candidates with same size → 8 KB prefix-compare before full hash
@@ -190,15 +186,29 @@ def smart_hash_files(
             #      OR  unchanged DB files with this size exist (could match)
             needs_hash = len(pgroup) >= 2 or n_db_same_size > 0
             for f in pgroup:
-                if is_cancelled and is_cancelled():
-                    return result
                 if needs_hash:
-                    result[f["ruta_actual"]] = compute_blake2b(Path(f["ruta_actual"]))
-                    if on_progress:
-                        on_progress(f["ruta_actual"], True)
+                    to_hash.append(f["ruta_actual"])
                 else:
-                    if on_progress:
-                        on_progress(f["ruta_actual"], False)
+                    to_skip.append(f["ruta_actual"])
+
+    # Parallel hashing
+    def _wrap_progress(ruta: str, hashed: bool):
+        if on_progress:
+            on_progress(ruta, hashed)
+
+    hash_results = hash_files_parallel(
+        [Path(r) for r in to_hash],
+        on_progress=lambda ruta, hashed: _wrap_progress(ruta, hashed),
+        is_cancelled=is_cancelled,
+        max_workers=max_workers,
+    )
+    for path, digest in hash_results.items():
+        result[str(path)] = digest
+
+    # Notify skipped paths (no actual hashing)
+    for ruta in to_skip:
+        if on_progress:
+            on_progress(ruta, False)
 
     return result
 
@@ -256,6 +266,27 @@ def get_file_metadata(path: Path) -> dict:
         "ruta_actual": str(path),
         "tamaño_bytes": stat.st_size,
         "fecha_modificacion": datetime.fromtimestamp(stat.st_mtime).isoformat(),
+        "fecha_acceso": datetime.fromtimestamp(stat.st_atime).isoformat(),
+        "fecha_creacion": datetime.fromtimestamp(stat.st_ctime).isoformat(),
+        "categoria_nombre": categoria_nombre,
+        "categoria_id": CATEGORIA_IDS.get(categoria_nombre, 9),
+        "hash_blake2": "",
+    }
+
+
+def get_file_metadata_fast(path: Path) -> dict:
+    """Stat-only metadata — no magic detection. Used in the parallel scan path."""
+    stat = path.stat()
+    ext = path.suffix.lower()
+    categoria_nombre = classify_extension(ext)
+    return {
+        "nombre": path.name,
+        "extension": ext,
+        "ruta_actual": str(path),
+        "tamaño_bytes": stat.st_size,
+        "fecha_modificacion": datetime.fromtimestamp(stat.st_mtime).isoformat(),
+        "fecha_acceso": datetime.fromtimestamp(stat.st_atime).isoformat(),
+        "fecha_creacion": datetime.fromtimestamp(stat.st_ctime).isoformat(),
         "categoria_nombre": categoria_nombre,
         "categoria_id": CATEGORIA_IDS.get(categoria_nombre, 9),
         "hash_blake2": "",
@@ -289,27 +320,75 @@ def scan_directory(
     return files
 
 
+def _stat_one(path: Path) -> dict | None:
+    """Stat a single path; returns metadata dict or None on error."""
+    try:
+        return get_file_metadata_fast(path)
+    except (PermissionError, OSError) as e:
+        logger.warning("scan | %s | %s", path, e)
+        return None
+
+
 def scan_directory_fast(
     root_path: str | Path,
     progress_callback=None,
+    is_cancelled=None,
+    max_workers: int = 16,
 ) -> list[dict]:
-    """Stat-only scan — no hashing. Used by the incremental indexing pipeline."""
+    """Parallel stat-only scan — no hashing. Used by the incremental indexing pipeline."""
     root = Path(root_path)
     if not root.exists() or not root.is_dir():
         raise ValueError(f"Path does not exist or is not a directory: {root_path}")
 
-    files: list[dict] = []
     all_file_paths = [p for p in root.rglob("*") if p.is_file()]
     total = len(all_file_paths)
+    files: list[dict] = []
+    done = 0
 
-    for idx, path in enumerate(all_file_paths, 1):
-        try:
-            meta = get_file_metadata(path)
-            files.append(meta)
-        except (PermissionError, OSError) as e:
-            logger.warning("scan | %s | %s", path, e)
-            continue
-        if progress_callback:
-            progress_callback(idx, total, path.name)
+    with ThreadPoolExecutor(max_workers=max_workers) as exe:
+        future_to_path = {exe.submit(_stat_one, p): p for p in all_file_paths}
+        for future in as_completed(future_to_path):
+            if is_cancelled and is_cancelled():
+                exe.shutdown(wait=False, cancel_futures=True)
+                break
+            done += 1
+            meta = future.result()
+            if meta is not None:
+                files.append(meta)
+            if progress_callback:
+                progress_callback(done, total, future_to_path[future].name)
 
     return files
+
+
+def hash_files_parallel(
+    paths_to_hash: list[Path],
+    on_progress=None,   # on_progress(ruta: str, hashed: bool)
+    is_cancelled=None,  # is_cancelled() -> bool
+    max_workers: int = 6,
+) -> dict[Path, str]:
+    """Hash a list of Paths in parallel using ThreadPoolExecutor.
+
+    Returns {Path: hex_digest_or_empty}.
+    """
+    result: dict[Path, str] = {}
+    if not paths_to_hash:
+        return result
+
+    with ThreadPoolExecutor(max_workers=max_workers) as exe:
+        future_to_path = {exe.submit(compute_blake2b, p): p for p in paths_to_hash}
+        for future in as_completed(future_to_path):
+            if is_cancelled and is_cancelled():
+                exe.shutdown(wait=False, cancel_futures=True)
+                break
+            path = future_to_path[future]
+            digest = future.result()
+            result[path] = digest
+            if on_progress:
+                on_progress(str(path), True)
+
+    # Fill in empties for any cancelled / not-yet-done paths
+    for p in paths_to_hash:
+        if p not in result:
+            result[p] = ""
+    return result

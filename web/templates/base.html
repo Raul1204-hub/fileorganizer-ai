@@ -20,22 +20,80 @@
     }
   </script>
   <style>
-    body { font-family: 'Inter', sans-serif; }
-
-    /* ── Design tokens ───────────────────────────────────────────────────── */
+    /* ══════════════════════════════════════════════════════════════════════
+       DESIGN TOKENS
+       Light: warm pastel neutrals   Dark: VS Code–style neutral grays
+       ══════════════════════════════════════════════════════════════════════ */
     :root {
-      --sidebar-w: 15rem;
-      --accent: #6366F1;
+      /* Palette — light */
+      --bg:          #F3F2F8;   /* page background: warm lavender-white    */
+      --surface:     #FFFFFF;   /* card / panel surface                    */
+      --surface-2:   #EDE9F6;   /* elevated / hover surface                */
+      --border:      #DDD8EE;   /* default border                          */
+      --border-soft: #EDE9F6;   /* extra-soft dividers                     */
+      --text-1:      #1C1829;   /* primary text                            */
+      --text-2:      #5C5470;   /* secondary text                          */
+      --text-3:      #9B93B8;   /* muted / placeholder                     */
+      --accent:      #6366F1;   /* indigo brand accent                     */
+      --accent-soft: rgba(99,102,241,0.10);
       --accent-glow: rgba(99,102,241,0.18);
-      --card-shadow: 0 1px 3px rgba(0,0,0,0.06), 0 4px 16px rgba(0,0,0,0.06);
-      --card-shadow-hover: 0 4px 16px rgba(0,0,0,0.10), 0 16px 32px rgba(0,0,0,0.08);
+      --shadow-sm:   0 1px 3px rgba(80,60,140,0.06), 0 4px 12px rgba(80,60,140,0.06);
+      --shadow-md:   0 4px 16px rgba(80,60,140,0.10), 0 12px 28px rgba(80,60,140,0.07);
+      /* Filex */
+      --filex-orange: #F7872A;
+      --filex-cream:  #F8D3A2;
+      --filex-outline:#2A1406;
+      --filex-blush:  #E9784B;
+      --filex-glow:   rgba(247,135,42,0.35);
     }
 
-    /* ── Sidebar ─────────────────────────────────────────────────────────── */
+    /* ── VS Code dark palette ────────────────────────────────────────────── */
+    .dark {
+      --bg:          #1E1E1E;
+      --surface:     #252526;
+      --surface-2:   #2D2D2D;
+      --border:      rgba(255,255,255,0.10);
+      --border-soft: rgba(255,255,255,0.06);
+      --text-1:      #D4D4D4;
+      --text-2:      #9D9D9D;
+      --text-3:      #6B6B6B;
+      --accent-soft: rgba(99,102,241,0.18);
+      --shadow-sm:   0 1px 3px rgba(0,0,0,0.30), 0 4px 12px rgba(0,0,0,0.20);
+      --shadow-md:   0 4px 16px rgba(0,0,0,0.40), 0 12px 28px rgba(0,0,0,0.30);
+    }
+
+    body {
+      font-family: 'Inter', sans-serif;
+      background-color: var(--bg) !important;
+      color: var(--text-1);
+    }
+
+    /* ── Tailwind dark overrides (remove blue tint) ──────────────────────── */
+    .dark .bg-gray-950 { background-color: #1E1E1E !important; }
+    .dark .bg-gray-900 { background-color: #252526 !important; }
+    .dark .bg-gray-800 { background-color: #2D2D2D !important; }
+    .dark .bg-gray-700 { background-color: #383838 !important; }
+    .dark .border-gray-800 { border-color: rgba(255,255,255,0.09) !important; }
+    .dark .border-gray-700 { border-color: rgba(255,255,255,0.12) !important; }
+    .dark .text-gray-100 { color: #D4D4D4 !important; }
+    .dark .text-gray-200 { color: #C8C8C8 !important; }
+    .dark .text-gray-300 { color: #B8B8B8 !important; }
+    .dark .text-gray-400 { color: #9D9D9D !important; }
+    .dark .text-gray-500 { color: #7A7A7A !important; }
+    .dark .text-gray-600 { color: #6B6B6B !important; }
+    /* Tailwind light overrides (pastel warmth) */
+    .bg-gray-50  { background-color: var(--bg) !important; }
+    .bg-white    { background-color: var(--surface) !important; }
+    .text-gray-900 { color: var(--text-1) !important; }
+    .text-gray-700 { color: var(--text-2) !important; }
+    .text-gray-500 { color: var(--text-3) !important; }
+    .border-gray-200 { border-color: var(--border) !important; }
+
+    /* ── Sidebar — VS Code Activity Bar feel ────────────────────────────── */
     #sidebar {
-      background: linear-gradient(180deg, #0D1117 0%, #0F172A 55%, #0B1120 100%);
-      border-right: 1px solid rgba(255,255,255,0.06);
-      box-shadow: 4px 0 24px rgba(0,0,0,0.18);
+      background: #1A1A1A;
+      border-right: 1px solid rgba(255,255,255,0.07);
+      box-shadow: 2px 0 16px rgba(0,0,0,0.22);
     }
 
     .nav-link {
@@ -43,28 +101,30 @@
       padding: 0.55rem 0.875rem;
       border-radius: 0.5rem; border-left: 3px solid transparent;
       font-size: 0.8125rem; font-weight: 500;
-      color: #94A3B8; transition: all 0.15s ease;
+      color: #8A8A8A; transition: all 0.15s ease;
       text-decoration: none;
     }
     .nav-link:hover {
       background: rgba(255,255,255,0.07);
-      color: #E2E8F0;
-      border-left-color: rgba(99,102,241,0.4);
+      color: #D4D4D4;
+      border-left-color: rgba(99,102,241,0.5);
     }
     .nav-link.active {
-      background: rgba(99,102,241,0.15);
-      color: #C7D2FE;
+      background: rgba(99,102,241,0.18);
+      color: #D4D4D4;
       border-left-color: #6366F1;
     }
+    .nav-link .fa-solid, .nav-link .fa-regular { opacity: 0.75; }
+    .nav-link.active .fa-solid, .nav-link.active .fa-regular { opacity: 1; }
 
     /* ── Cards ───────────────────────────────────────────────────────────── */
-    .bg-white.rounded-2xl, .dark .bg-gray-900.rounded-2xl,
-    .bg-white.rounded-xl,  .dark .bg-gray-900.rounded-xl {
-      box-shadow: var(--card-shadow);
-      transition: box-shadow 0.2s ease, transform 0.2s ease;
+    .bg-white.rounded-2xl, .bg-white.rounded-xl,
+    .dark .bg-gray-900.rounded-2xl, .dark .bg-gray-900.rounded-xl {
+      box-shadow: var(--shadow-sm);
+      transition: box-shadow 0.2s ease;
     }
     .bg-white.rounded-2xl:hover, .dark .bg-gray-900.rounded-2xl:hover {
-      box-shadow: var(--card-shadow-hover);
+      box-shadow: var(--shadow-md);
     }
 
     /* ── Badge ───────────────────────────────────────────────────────────── */
@@ -74,25 +134,35 @@
       font-size: 0.7rem; font-weight: 600; letter-spacing: 0.01em;
     }
 
-    /* ── Buttons ─────────────────────────────────────────────────────────── */
     button { transition: all 0.15s ease; }
 
     /* ── Main background (subtle dot grid) ───────────────────────────────── */
     .main-bg {
-      background-color: #F8FAFC;
-      background-image: radial-gradient(circle, rgba(99,102,241,0.06) 1px, transparent 1px);
+      background-color: var(--bg);
+      background-image: radial-gradient(circle, rgba(99,102,241,0.05) 1px, transparent 1px);
       background-size: 28px 28px;
     }
     .dark .main-bg {
-      background-color: #030712;
-      background-image: radial-gradient(circle, rgba(99,102,241,0.07) 1px, transparent 1px);
+      background-image: radial-gradient(circle, rgba(255,255,255,0.025) 1px, transparent 1px);
     }
 
     /* ── Scrollbar ───────────────────────────────────────────────────────── */
     ::-webkit-scrollbar { width: 5px; height: 5px; }
     ::-webkit-scrollbar-track { background: transparent; }
-    ::-webkit-scrollbar-thumb { background: #CBD5E1; border-radius: 3px; }
-    .dark ::-webkit-scrollbar-thumb { background: #334155; }
+    ::-webkit-scrollbar-thumb { background: #C4BEDD; border-radius: 3px; }
+    .dark ::-webkit-scrollbar-thumb { background: #4A4A4A; }
+
+    /* ── Header ─────────────────────────────────────────────────────────── */
+    header {
+      background: rgba(243,242,248,0.92) !important;
+      backdrop-filter: blur(14px);
+      -webkit-backdrop-filter: blur(14px);
+      border-bottom-color: var(--border) !important;
+    }
+    .dark header {
+      background: rgba(30,30,30,0.95) !important;
+      border-bottom-color: rgba(255,255,255,0.08) !important;
+    }
 
     /* ── Librarian widget ────────────────────────────────────────────────── */
     #lib-widget {
@@ -101,40 +171,31 @@
       position: relative;
     }
     #lib-canvas, [data-lib-canvas] {
-      image-rendering: pixelated;
-      image-rendering: crisp-edges;
+      image-rendering: auto;
     }
-    /* ── Filex colour tokens ────────────────────────────────────────────────── */
-    :root {
-      --filex-orange:  #F7872A;
-      --filex-cream:   #F8D3A2;
-      --filex-outline: #2A1406;
-      --filex-blush:   #E9784B;
-      --filex-glow:    rgba(247,135,42,0.35);
-    }
-
     #lib-canvas {
       cursor: pointer;
       filter: drop-shadow(0 2px 8px var(--filex-glow));
       transition: filter 0.2s ease;
     }
     #lib-canvas:hover { filter: drop-shadow(0 4px 14px rgba(247,135,42,0.55)); }
+
     #lib-bubble {
       position: absolute; bottom: calc(100% - 4px); left: 50%;
       transform: translateX(-50%) translateY(6px);
-      background: #1E293B; color: #E2E8F0;
-      border: 1px solid rgba(99,102,241,0.4);
+      background: #252526; color: #D4D4D4;
+      border: 1px solid rgba(255,255,255,0.12);
       border-radius: 10px; padding: 6px 10px;
       font-size: 10px; font-weight: 500; line-height: 1.45;
       white-space: normal; max-width: 148px; text-align: center;
-      box-shadow: 0 4px 16px rgba(0,0,0,0.35);
+      box-shadow: 0 4px 16px rgba(0,0,0,0.40);
       pointer-events: none; z-index: 60;
       opacity: 0; transition: opacity 0.28s ease, transform 0.28s ease;
     }
     #lib-bubble::after {
       content: ''; position: absolute; top: 100%; left: 50%;
       transform: translateX(-50%);
-      border: 5px solid transparent; border-top-color: #1E293B;
+      border: 5px solid transparent; border-top-color: #252526;
     }
     #lib-bubble.visible { opacity: 1; transform: translateX(-50%) translateY(0); }
     #lib-bubble.lib-bubble-thought {
@@ -142,7 +203,7 @@
       font-style: italic; font-size: 9.5px; color: #C4B5FD;
     }
 
-    /* ── Jump animation on click ─────────────────────────────────────────── */
+    /* ── Jump animation ─────────────────────────────────────────────────── */
     @keyframes lib-jump {
       0%   { transform: translateY(0) rotate(0deg); }
       18%  { transform: translateY(-18px) rotate(-5deg); }
@@ -151,19 +212,8 @@
       80%  { transform: translateY(-4px)  rotate(1deg); }
       100% { transform: translateY(0) rotate(0deg); }
     }
-    /* animate the canvas directly (works for both pixel and smooth fox) */
     .lib-jump #lib-canvas {
       animation: lib-jump 0.7s cubic-bezier(0.34, 1.56, 0.64, 1);
-    }
-
-    /* ── Header refinement ───────────────────────────────────────────────── */
-    header {
-      background: rgba(255,255,255,0.92) !important;
-      backdrop-filter: blur(12px);
-      -webkit-backdrop-filter: blur(12px);
-    }
-    .dark header {
-      background: rgba(3,7,18,0.90) !important;
     }
 
     /* ── Toast ───────────────────────────────────────────────────────────── */
@@ -178,10 +228,73 @@
       from { opacity: 0; transform: translateY(8px) scale(0.95); }
       to   { opacity: 1; transform: translateY(0) scale(1); }
     }
+
+    /* ── Scan panel ──────────────────────────────────────────────────────── */
+    #scan-panel {
+      background: var(--surface);
+      border-top: 1px solid var(--border);
+      box-shadow: 0 -4px 24px rgba(0,0,0,0.10);
+    }
+    /* Thin progress bar at very top of panel */
+    #sp-topbar {
+      height: 3px;
+      width: 100%;
+      background: rgba(99,102,241,0.15);
+      overflow: hidden;
+      flex-shrink: 0;
+    }
+    #sp-bar {
+      height: 100%;
+      background: linear-gradient(90deg, #6366F1, #8B5CF6);
+      border-radius: 0 2px 2px 0;
+      transition: width 0.5s ease;
+    }
+    /* Compact header row */
+    #sp-compact {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 18px;
+      min-height: 53px;
+    }
+    /* Phase icon pill */
+    .sp-phase-icon {
+      display: flex; align-items: center; justify-content: center;
+      width: 28px; height: 28px; border-radius: 8px;
+      background: rgba(99,102,241,0.12);
+      flex-shrink: 0;
+    }
+    /* Log lines list */
+    #sp-log-list {
+      overflow-y: auto;
+      max-height: 200px;
+      font-size: 11px;
+      font-family: 'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
+      line-height: 1.6;
+    }
+    .sp-log-info  { color: var(--text-3); }
+    .sp-log-ok    { color: #10B981; }
+    .sp-log-warn  { color: #F59E0B; }
+    .sp-log-error { color: #EF4444; }
+
+    /* Expanded detail area */
+    #sp-detail {
+      border-top: 1px solid var(--border);
+      padding: 10px 18px 12px;
+    }
+    #sp-stats-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px 14px;
+      font-size: 11.5px;
+      color: var(--text-2);
+      margin-bottom: 8px;
+    }
+    #sp-stats-row strong { color: var(--text-1); font-weight: 600; }
   </style>
   {% block head %}{% endblock %}
 </head>
-<body class="h-full bg-gray-50 dark:bg-gray-950 text-gray-900 dark:text-gray-100 transition-colors">
+<body class="h-full transition-colors" style="background-color:var(--bg);color:var(--text-1)">
 
 <div class="flex h-full">
 
@@ -309,26 +422,56 @@
 <div id="toast-container" class="fixed bottom-5 right-5 z-50 flex flex-col gap-2 pointer-events-none"></div>
 
 <!-- ── Scan progress panel ───────────────────────────────────────────────────── -->
-<div id="scan-panel" class="hidden fixed bottom-0 left-60 right-0 z-40 bg-white dark:bg-gray-900 border-t border-gray-200 dark:border-gray-800 shadow-lg px-6 py-3">
-  <div class="max-w-4xl flex flex-col gap-1.5">
-    <div class="flex items-center justify-between">
-      <div class="flex items-center gap-2 text-sm font-medium text-gray-900 dark:text-white">
-        <i class="fa-solid fa-spinner fa-spin text-indigo-500"></i>
-        <span id="sp-fase">Escaneando…</span>
-        <span id="sp-fraction" class="text-gray-400 text-xs font-normal"></span>
-      </div>
-      <div class="flex items-center gap-3">
-        <span id="sp-eta" class="text-xs text-gray-400"></span>
-        <button onclick="cancelScan()" id="sp-cancel-btn"
-                class="text-xs px-2.5 py-1 rounded-md bg-red-50 dark:bg-red-950 text-red-600 dark:text-red-400 hover:bg-red-100 dark:hover:bg-red-900 transition">
-          <i class="fa-solid fa-stop mr-1"></i>Cancelar
-        </button>
-      </div>
+<div id="scan-panel" class="hidden fixed bottom-0 left-60 right-0 z-40 flex flex-col">
+  <!-- Thin progress bar at very top -->
+  <div id="sp-topbar"><div id="sp-bar" style="width:0%"></div></div>
+
+  <!-- Compact header row -->
+  <div id="sp-compact">
+    <!-- Phase icon -->
+    <div class="sp-phase-icon">
+      <i id="sp-phase-icon" class="fa-solid fa-spinner fa-spin text-indigo-400 text-xs"></i>
     </div>
-    <div class="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-1.5 overflow-hidden">
-      <div id="sp-bar" class="h-full bg-indigo-500 rounded-full transition-all duration-500" style="width:0%"></div>
+    <!-- Phase label + fraction -->
+    <div class="flex flex-col min-w-0 flex-1">
+      <div class="flex items-center gap-2">
+        <span id="sp-fase" class="text-sm font-semibold truncate" style="color:var(--text-1)">Escaneando archivos</span>
+        <span id="sp-fraction" class="text-xs font-mono flex-shrink-0" style="color:var(--text-3)"></span>
+      </div>
+      <div id="sp-file" class="text-xs truncate" style="color:var(--text-3);max-width:50vw"></div>
     </div>
-    <div id="sp-file" class="text-xs text-gray-400 truncate"></div>
+    <!-- ETA -->
+    <span id="sp-eta" class="text-xs flex-shrink-0 hidden sm:block" style="color:var(--text-3)"></span>
+    <!-- Expand button -->
+    <button onclick="toggleScanDetail()" id="sp-expand-btn"
+            class="text-xs px-2 py-1 rounded-md transition flex-shrink-0"
+            style="background:rgba(99,102,241,0.10);color:#6366F1"
+            title="Expandir/Contraer detalle">
+      <i id="sp-expand-icon" class="fa-solid fa-chevron-up"></i>
+      <span id="sp-expand-label" class="ml-1">Expandir</span>
+    </button>
+    <!-- Cancel button -->
+    <button onclick="cancelScan()" id="sp-cancel-btn"
+            class="text-xs px-2.5 py-1 rounded-md flex-shrink-0 transition"
+            style="background:rgba(239,68,68,0.10);color:#EF4444">
+      <i class="fa-solid fa-stop mr-1"></i>Cancelar
+    </button>
+  </div>
+
+  <!-- Expanded detail (hidden by default) -->
+  <div id="sp-detail" class="hidden">
+    <!-- Stats row -->
+    <div id="sp-stats-row">
+      <span>Nuevos: <strong id="sp-s-new">0</strong></span>
+      <span>Modificados: <strong id="sp-s-mod">0</strong></span>
+      <span>Sin cambios: <strong id="sp-s-unch">—</strong></span>
+      <span>Desaparecidos: <strong id="sp-s-gone">0</strong></span>
+      <span>Caché: <strong id="sp-s-cache">0</strong> hits</span>
+      <span>Errores: <strong id="sp-s-err">0</strong></span>
+      <span id="sp-s-speed-wrap">Vel: <strong id="sp-s-speed">—</strong> arch/min</span>
+    </div>
+    <!-- Log lines -->
+    <div id="sp-log-list"></div>
   </div>
 </div>
 
@@ -360,6 +503,7 @@
   // ── Scan progress ──────────────────────────────────────────────────────────
   const FASE_LABELS = {
     escaneando:      'Escaneando archivos',
+    hasheando:       'Hasheando',
     analizando:      'Analizando con IA',
     recomendaciones: 'Generando recomendaciones',
     completado:      'Escaneo completado',
@@ -367,8 +511,66 @@
     idle:            'En espera',
   };
 
+  const FASE_ICONS = {
+    escaneando:      'fa-magnifying-glass',
+    hasheando:       'fa-hashtag',
+    analizando:      'fa-brain',
+    recomendaciones: 'fa-wand-magic-sparkles',
+    completado:      'fa-circle-check',
+    error:           'fa-circle-xmark',
+    idle:            'fa-circle',
+  };
+
   let _prevFase = 'idle';
   let _sseSource = null;
+  let _scanDetailOpen = false;
+
+  function toggleScanDetail() {
+    _scanDetailOpen = !_scanDetailOpen;
+    const detail = document.getElementById('sp-detail');
+    const icon   = document.getElementById('sp-expand-icon');
+    const label  = document.getElementById('sp-expand-label');
+    if (_scanDetailOpen) {
+      detail.classList.remove('hidden');
+      icon.classList.replace('fa-chevron-up', 'fa-chevron-down');
+      label.textContent = 'Contraer';
+    } else {
+      detail.classList.add('hidden');
+      icon.classList.replace('fa-chevron-down', 'fa-chevron-up');
+      label.textContent = 'Expandir';
+    }
+  }
+
+  let _lastLogMsg = '';  // fingerprint of last rendered line to avoid duplicates
+
+  function _renderLogLines(lines) {
+    if (!_scanDetailOpen || !lines || lines.length === 0) return;
+    const list = document.getElementById('sp-log-list');
+    // Find which lines are new since our last render
+    // The server sends up to last-50; we use a msg fingerprint to skip already-rendered ones
+    let startIdx = 0;
+    if (_lastLogMsg) {
+      for (let i = lines.length - 1; i >= 0; i--) {
+        if ((lines[i].ts + lines[i].msg) === _lastLogMsg) { startIdx = i + 1; break; }
+      }
+    }
+    const newLines = lines.slice(startIdx);
+    if (newLines.length === 0) return;
+    newLines.forEach(entry => {
+      const div = document.createElement('div');
+      div.className = 'sp-log-' + (entry.level || 'info');
+      const icon = entry.level === 'ok' ? '✔' : entry.level === 'warn' ? '⚠' : entry.level === 'error' ? '✖' : '▸';
+      div.innerHTML = `<span style="color:var(--text-3)">[${entry.ts}]</span> ${icon} ${_escHtml(entry.msg)}`;
+      list.appendChild(div);
+    });
+    _lastLogMsg = lines[lines.length - 1].ts + lines[lines.length - 1].msg;
+    // Auto-scroll to bottom
+    list.scrollTop = list.scrollHeight;
+  }
+
+  function _escHtml(s) {
+    return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  }
 
   function _applyState(s) {
     const ind    = document.getElementById('scan-indicator');
@@ -379,27 +581,50 @@
     const spEta  = document.getElementById('sp-eta');
     const spBar  = document.getElementById('sp-bar');
     const spFile = document.getElementById('sp-file');
+    const spIcon = document.getElementById('sp-phase-icon');
 
     if (s.running) {
       ind.classList.remove('hidden'); ind.classList.add('flex');
       panel.classList.remove('hidden');
 
       const label = FASE_LABELS[s.fase] || s.fase;
+      const iconClass = FASE_ICONS[s.fase] || 'fa-spinner';
       indTxt.textContent = label;
       spFase.textContent = label;
 
+      // Update phase icon (keep fa-spin only for active phases)
+      const spinning = ['escaneando','hasheando','analizando','recomendaciones'].includes(s.fase);
+      spIcon.className = 'fa-solid ' + iconClass + ' text-indigo-400 text-xs' + (spinning ? ' fa-spin' : '');
+
       const pct = s.total > 0 ? Math.round((s.hechos / s.total) * 100) : 0;
       spBar.style.width = (s.total > 0 ? pct : 0) + '%';
-      spFrac.textContent = s.total > 0 ? `(${s.hechos}/${s.total})` : '';
+      spFrac.textContent = s.total > 0 ? `(${s.hechos.toLocaleString()}/${s.total.toLocaleString()})` : '';
       spFile.textContent = s.archivo_actual || '';
 
       if (s.eta_segundos >= 0) {
         const min = Math.floor(s.eta_segundos / 60);
         const sec = Math.round(s.eta_segundos % 60);
-        spEta.textContent = min > 0 ? `~${min}m ${sec}s restantes` : `~${sec}s restantes`;
+        spEta.textContent = min > 0 ? `~${min}m ${sec}s` : `~${sec}s`;
       } else {
-        spEta.textContent = 'calculando ETA…';
+        spEta.textContent = 'calculando…';
       }
+
+      // Update stats in expanded panel
+      const sd = s.stats_detail || {};
+      _setTxt('sp-s-new',   (sd.nuevos         || 0).toLocaleString());
+      _setTxt('sp-s-mod',   (sd.modificados     || 0).toLocaleString());
+      _setTxt('sp-s-unch',  sd.sin_cambios != null ? sd.sin_cambios.toLocaleString() : '—');
+      _setTxt('sp-s-gone',  (sd.desaparecidos   || 0).toLocaleString());
+      _setTxt('sp-s-cache', (sd.cache_hits       || 0).toLocaleString());
+      _setTxt('sp-s-err',   (sd.errores          || 0).toLocaleString());
+      if (s.speed_per_min > 0) {
+        _setTxt('sp-s-speed', s.speed_per_min.toFixed(1));
+        document.getElementById('sp-s-speed-wrap').style.display = '';
+      }
+
+      // Append new log lines
+      if (s.log_lines) _renderLogLines(s.log_lines);
+
     } else {
       ind.classList.add('hidden'); ind.classList.remove('flex');
       if (s.fase === 'completado' && _prevFase !== 'completado' && _prevFase !== 'idle') {
@@ -422,9 +647,19 @@
     _prevFase = s.fase;
   }
 
+  function _setTxt(id, val) {
+    const el = document.getElementById(id);
+    if (el) el.textContent = val;
+  }
+
   function notifyScanStarted() {
+    // Reset log tracking for fresh scan
+    _lastLogMsg = '';
+    const list = document.getElementById('sp-log-list');
+    if (list) list.innerHTML = '';
     _applyState({ running: true, fase: 'escaneando', hechos: 0, total: 0,
-                  archivo_actual: '', eta_segundos: -1, summary: {} });
+                  archivo_actual: '', eta_segundos: -1, summary: {},
+                  log_lines: [], stats_detail: {}, speed_per_min: 0 });
     _startSSE();
   }
 
