@@ -4,6 +4,7 @@ import sys
 import threading
 import time
 import webbrowser
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import ollama_client
@@ -445,8 +446,25 @@ def _run_scan(target_path: str):
         disk_paths = {f["ruta_actual"] for f in disk_files}
         _log_scan("ok", f"Disco: {len(disk_files):,} archivos encontrados en {_elapsed_scan:.1f}s")
 
-        # ── Reconcile disk vs DB ──────────────────────────────────────────────
-        db_index = database.get_all_archivos_indexed()
+        if _ss.cancelled:
+            _log_scan("warn", "Escaneo cancelado en fase de disco")
+            with _lock:
+                _ss.fase = "completado"
+            return
+
+        # ── Reconcile disk vs DB (scoped to this directory only) ─────────────
+        with _lock:
+            _ss.fase = "reconciliando"
+            _ss.hechos = 0
+            _ss.total = 0
+            _ss.archivo_actual = "Comparando con base de datos…"
+        _log_scan("info", "Consultando base de datos…")
+
+        # IMPORTANT: only fetch DB rows under the scanned directory so that files
+        # from other directories are never accidentally marked as disappeared.
+        db_index = database.get_all_archivos_indexed(under_path=target_path)
+        _log_scan("info", f"Base de datos: {len(db_index):,} registros bajo este directorio")
+
         unchanged: list[dict] = []
         new_files: list[dict] = []
         modified: list[dict] = []
@@ -471,8 +489,8 @@ def _run_scan(target_path: str):
             if ruta not in disk_paths:
                 disappeared_ids.append(db_row["id"])
 
-        for aid in disappeared_ids:
-            database.mark_archivo_desaparecido(aid)
+        # Batch update disappeared files (single transaction instead of N individual commits)
+        database.mark_archivos_desaparecidos_batch(disappeared_ids)
 
         _log_scan(
             "info",
@@ -482,7 +500,7 @@ def _run_scan(target_path: str):
         # Count how many of the new/modified files are analyzable docs/images
         _doc_count = sum(1 for f in [*new_files, *modified] if f["extension"] in scanner.DOC_EXTS or f["extension"] in scanner.IMG_EXTS)
         if _doc_count > 0:
-            _log_scan("info", f"→ {_doc_count:,} archivo(s) de documento/imagen serán enviados a análisis IA")
+            _log_scan("info", f"→ {_doc_count:,} documento(s)/imagen(es) irán a análisis IA")
         with _lock:
             _ss.stats_detail = {
                 "nuevos": len(new_files),
@@ -536,11 +554,15 @@ def _run_scan(target_path: str):
             f" en {_elapsed_hash:.1f}s",
         )
 
-        # ── Check optional models once (vision + embed) ───────────────────────
-        _vision_check = ollama_client.check_ollama([VISION_MODEL])
-        _vision_available = _vision_check["running"] and not _vision_check["missing"]
-        if not _vision_available:
-            _wlog.warning("vision model '%s' not available — image analysis skipped", VISION_MODEL)
+        # ── Check vision model only if there are image candidates ────────────
+        _img_candidates = [f for f in candidates if f["extension"] in scanner.IMG_EXTS]
+        if _img_candidates:
+            _vision_check = ollama_client.check_ollama([VISION_MODEL])
+            _vision_available = _vision_check["running"] and not _vision_check["missing"]
+            if not _vision_available:
+                _wlog.warning("vision model '%s' not available — image analysis skipped", VISION_MODEL)
+        else:
+            _vision_available = False
 
         # ── Insert new files (batch) ──────────────────────────────────────────
         cache_hits = 0
@@ -632,11 +654,14 @@ def _run_scan(target_path: str):
             _ss.stats_detail["cache_hits"] = cache_hits
 
         # ── Analysis phase (Ollama, weighted EMA) ─────────────────────────────
-        # Check embed model once before the loop; missing it is non-fatal
-        _embed_check = ollama_client.check_ollama([EMBED_MODEL])
-        _embed_available = _embed_check["running"] and not _embed_check["missing"]
-        if not _embed_available:
-            _wlog.warning("embed model '%s' not available — embeddings skipped this scan", EMBED_MODEL)
+        # Check embed model only if there are files to analyze (non-fatal if missing)
+        if to_analyze:
+            _embed_check = ollama_client.check_ollama([EMBED_MODEL])
+            _embed_available = _embed_check["running"] and not _embed_check["missing"]
+            if not _embed_available:
+                _wlog.warning("embed model '%s' not available — embeddings skipped this scan", EMBED_MODEL)
+        else:
+            _embed_available = False
 
         n_to_analyze = len(to_analyze)
         if n_to_analyze == 0:
@@ -663,6 +688,7 @@ def _run_scan(target_path: str):
                 elif reason == "ollama":
                     _ss.fallos_ollama += 1
 
+        _anal_pool = ThreadPoolExecutor(max_workers=1)
         for _anal_idx, (ruta, aid) in enumerate(to_analyze.items(), 1):
             if _ss.cancelled:
                 break
@@ -673,8 +699,23 @@ def _run_scan(target_path: str):
             _log_scan("info", f"[{_anal_idx}/{n_to_analyze}] Analizando: {fname}")
 
             t0 = time.monotonic()
-            result = analyzer.analyze_file(Path(ruta), Path(ruta).suffix.lower(), on_failure=_on_failure)
+            # Run in a thread so we can check for cancellation every 0.5s
+            # instead of blocking up to OLLAMA_TIMEOUT (180s) with no escape
+            _anal_fut = _anal_pool.submit(
+                analyzer.analyze_file, Path(ruta), Path(ruta).suffix.lower(), _on_failure
+            )
+            while not _anal_fut.done():
+                if _ss.cancelled:
+                    break
+                time.sleep(0.5)
+            if _ss.cancelled and not _anal_fut.done():
+                # Don't wait — the Ollama request will time out on its own
+                result = None
+            else:
+                result = _anal_fut.result()
             elapsed = time.monotonic() - t0
+            if _ss.cancelled:
+                break
             text_len = result.pop("_text_len", 0) if result else 0
             texto_via = result.pop("_texto_via", None) if result else None
 
@@ -724,6 +765,8 @@ def _run_scan(target_path: str):
                     except Exception as _exc:
                         _wlog.warning("embed_failed | %s | %s", Path(ruta).name, _exc)
 
+        _anal_pool.shutdown(wait=False)
+
         # ── Recommendations phase ─────────────────────────────────────────────
         if not _ss.cancelled:
             _log_scan("info", "Generando recomendaciones…")
@@ -734,8 +777,18 @@ def _run_scan(target_path: str):
                 _ss.archivo_actual = ""
                 _ss.eta_segundos = -1.0
             database.clear_recomendaciones()
-            recommendations.run_all_rules()
-            _log_scan("ok", "Recomendaciones generadas")
+            # Run in thread so cancel is responsive (recommendations can be slow on large DBs)
+            _rec_pool = ThreadPoolExecutor(max_workers=1)
+            _rec_fut = _rec_pool.submit(recommendations.run_all_rules)
+            while not _rec_fut.done():
+                if _ss.cancelled:
+                    break
+                time.sleep(0.5)
+            _rec_pool.shutdown(wait=False)
+            if _ss.cancelled and not _rec_fut.done():
+                _log_scan("warn", "Recomendaciones canceladas")
+            else:
+                _log_scan("ok", "Recomendaciones generadas")
 
         # ── Complete ──────────────────────────────────────────────────────────
         with _lock:

@@ -427,14 +427,29 @@ def delete_all_archivos():
     conn.close()
 
 
-def get_all_archivos_indexed() -> dict:
-    """Return {ruta_actual: row_dict} for ALL rows including disappeared ones."""
+def get_all_archivos_indexed(under_path: str | None = None) -> dict:
+    """Return {ruta_actual: row_dict} for ALL rows including disappeared ones.
+
+    If under_path is given, only returns rows whose ruta_actual starts with that
+    prefix (case-insensitive LIKE on Windows paths).  This scopes reconciliation
+    to the directory that was just scanned so files from other directories are
+    never marked as disappeared.
+    """
     conn = get_connection()
     cur = conn.cursor()
-    cur.execute(
-        "SELECT id, ruta_actual, tamaño_bytes, fecha_modificacion, hash_blake2, resumen_ia, existe "
-        "FROM archivos"
-    )
+    if under_path:
+        # Normalize to forward-slash prefix and use LIKE for Windows-style paths
+        prefix = str(under_path).rstrip("/\\").replace("\\", "/")
+        cur.execute(
+            "SELECT id, ruta_actual, tamaño_bytes, fecha_modificacion, hash_blake2, resumen_ia, existe "
+            "FROM archivos WHERE REPLACE(ruta_actual, '\\', '/') LIKE ? OR REPLACE(ruta_actual, '\\', '/') = ?",
+            (prefix + "/%", prefix),
+        )
+    else:
+        cur.execute(
+            "SELECT id, ruta_actual, tamaño_bytes, fecha_modificacion, hash_blake2, resumen_ia, existe "
+            "FROM archivos"
+        )
     rows = cur.fetchall()
     conn.close()
     return {r["ruta_actual"]: dict(r) for r in rows}
@@ -594,6 +609,21 @@ def mark_archivo_desaparecido(archivo_id):
     conn = get_connection()
     cur = conn.cursor()
     cur.execute("UPDATE archivos SET existe = 0 WHERE id = ?", (archivo_id,))
+    conn.commit()
+    conn.close()
+
+
+def mark_archivos_desaparecidos_batch(archivo_ids: list[int]) -> None:
+    """Batch-update existe=0 for multiple files in a single transaction."""
+    if not archivo_ids:
+        return
+    conn = get_connection()
+    cur = conn.cursor()
+    # SQLite parameter limit is 999; process in chunks
+    for i in range(0, len(archivo_ids), 500):
+        chunk = archivo_ids[i : i + 500]
+        placeholders = ",".join("?" * len(chunk))
+        cur.execute(f"UPDATE archivos SET existe = 0 WHERE id IN ({placeholders})", chunk)
     conn.commit()
     conn.close()
 
@@ -761,6 +791,37 @@ def get_recomendaciones(solo_activas=True, limit=100):
         query += " AND r.descartada = 0"
     query += f" ORDER BY r.fecha DESC LIMIT {int(limit)}"
     cur.execute(query)
+    rows = cur.fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def insert_recomendaciones_batch(rows: list[tuple]) -> None:
+    """Batch-insert recommendations in a single transaction.
+
+    Each row must be (archivo_id, tipo, mensaje, fecha_str).
+    Called after clear_recomendaciones() so no duplicate check is needed.
+    """
+    if not rows:
+        return
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.executemany(
+        "INSERT INTO recomendaciones (archivo_id, tipo, mensaje, fecha, vista, descartada) VALUES (?, ?, ?, ?, 0, 0)",
+        rows,
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_all_archivos_minimal() -> list[dict]:
+    """Lightweight fetch of all active files — only columns needed by recommendation rules."""
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT id, nombre, extension, ruta_actual, tamaño_bytes, fecha_modificacion, categoria_id "
+        "FROM archivos WHERE existe = 1"
+    )
     rows = cur.fetchall()
     conn.close()
     return [dict(r) for r in rows]

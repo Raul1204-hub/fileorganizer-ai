@@ -366,6 +366,8 @@ class WatcherManager:
                 fecha_modificacion=meta["fecha_modificacion"],
                 hash_blake2=hash_blake2,
                 categoria_id=meta["categoria_id"],
+                fecha_acceso=meta.get("fecha_acceso"),
+                fecha_creacion=meta.get("fecha_creacion"),
             )
             database.clear_etiquetas_archivo(existing["id"])
             database.update_archivo_resumen(existing["id"], None)
@@ -380,6 +382,8 @@ class WatcherManager:
                 fecha_modificacion=meta["fecha_modificacion"],
                 hash_blake2=hash_blake2,
                 categoria_id=meta["categoria_id"],
+                fecha_acceso=meta.get("fecha_acceso"),
+                fecha_creacion=meta.get("fecha_creacion"),
             )
             database.insert_historial(archivo_id, None, path, "indexar")
 

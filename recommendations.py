@@ -18,153 +18,104 @@ SENSITIVE_KEYWORDS = [
 
 
 def run_all_rules():
-    """Run all 7 rules, clearing old recommendations first."""
+    """Run all 7 rules in a single pass, batch-insert results."""
     database.clear_recomendaciones()
-    r1_duplicates()
-    r2_old_files()
-    r3_heavy_files()
-    r4_scattered_categories()
-    r5_sensitive_names()
-    r6_temp_files()
-    r7_heavy_video()
 
+    now_iso = datetime.now().isoformat()
+    cutoff_2y = (datetime.now() - timedelta(days=730)).isoformat()
+    cutoff_1y = (datetime.now() - timedelta(days=365)).isoformat()
+    VIDEO_EXTS = {".mp4", ".mkv"}
+    TEMP_EXTS = {".tmp", ".log", ".bak"}
+    VIDEO_SIZE_MIN = 500 * 1024 * 1024
 
-# ── R1: Duplicates ────────────────────────────────────────────────────────────
+    recs: list[tuple] = []  # (archivo_id, tipo, mensaje, fecha)
 
-
-def r1_duplicates():
+    # ── R1: Duplicates (requires hash GROUP BY — separate SQL query) ──────────
     conn = database.get_connection()
     cur = conn.cursor()
     cur.execute(
         """SELECT hash_blake2, COUNT(*) AS cnt, GROUP_CONCAT(id) AS ids
            FROM archivos
-           WHERE hash_blake2 != '' AND hash_blake2 IS NOT NULL
+           WHERE hash_blake2 != '' AND hash_blake2 IS NOT NULL AND existe = 1
            GROUP BY hash_blake2
            HAVING cnt > 1"""
     )
-    rows = cur.fetchall()
+    dup_rows = cur.fetchall()
     conn.close()
-    for row in rows:
+    for row in dup_rows:
         ids = [int(i) for i in row["ids"].split(",")]
+        msg = f"{row['cnt']} archivos duplicados detectados (mismo contenido)"
         for archivo_id in ids:
-            database.insert_recomendacion(
-                archivo_id,
-                "R1",
-                f"{row['cnt']} archivos duplicados detectados (mismo contenido)",
-            )
+            recs.append((archivo_id, "R1", msg, now_iso))
 
-
-# ── R2: Old files (>2 years without modification) ────────────────────────────
-
-
-def r2_old_files():
-    cutoff = (datetime.now() - timedelta(days=730)).isoformat()
-    for a in database.get_all_archivos():
-        mod = a.get("fecha_modificacion") or ""
-        if mod and mod < cutoff:
-            database.insert_recomendacion(
-                a["id"],
-                "R2",
-                "Sin modificar desde hace más de 2 años",
-            )
-
-
-# ── R3: Top 5 heaviest files ──────────────────────────────────────────────────
-
-
-def r3_heavy_files():
-    conn = database.get_connection()
-    cur = conn.cursor()
-    cur.execute("SELECT id, nombre, tamaño_bytes FROM archivos ORDER BY tamaño_bytes DESC LIMIT 5")
-    rows = cur.fetchall()
-    conn.close()
-    for row in rows:
-        mb = (row["tamaño_bytes"] or 0) / (1024 * 1024)
-        database.insert_recomendacion(
-            row["id"],
-            "R3",
-            f"Uno de los 5 archivos más pesados ({mb:.1f} MB)",
-        )
-
-
-# ── R4: Same category scattered across 3+ folders ────────────────────────────
-
-
-def r4_scattered_categories():
+    # ── R3: Top 5 heaviest files ──────────────────────────────────────────────
     conn = database.get_connection()
     cur = conn.cursor()
     cur.execute(
-        """SELECT c.nombre AS cat, a.id, a.ruta_actual
-           FROM archivos a
-           JOIN categorias c ON a.categoria_id = c.id"""
+        "SELECT id, tamaño_bytes FROM archivos WHERE existe = 1 ORDER BY tamaño_bytes DESC LIMIT 5"
     )
-    rows = cur.fetchall()
+    heavy_rows = cur.fetchall()
     conn.close()
+    for row in heavy_rows:
+        mb = (row["tamaño_bytes"] or 0) / (1024 * 1024)
+        recs.append((row["id"], "R3", f"Uno de los 5 archivos más pesados ({mb:.1f} MB)", now_iso))
 
-    cat_folders: dict[str, set] = defaultdict(set)
-    cat_files: dict[str, list] = defaultdict(list)
-    for row in rows:
-        parent = str(Path(row["ruta_actual"]).parent)
-        cat_folders[row["cat"]].add(parent)
-        cat_files[row["cat"]].append(row["id"])
+    # ── R2, R4, R5, R6, R7: single scan of all active files ──────────────────
+    all_files = database.get_all_archivos_minimal()
 
-    for cat, folders in cat_folders.items():
-        if len(folders) >= 3:
-            n_files = len(cat_files[cat])
-            n_folders = len(folders)
-            for archivo_id in cat_files[cat]:
-                database.insert_recomendacion(
-                    archivo_id,
-                    "R4",
-                    f"{n_files} archivos de '{cat}' dispersos en {n_folders} carpetas",
-                )
+    cat_folders: dict[int, set] = defaultdict(set)  # categoria_id → set of parent dirs
+    cat_file_ids: dict[int, list] = defaultdict(list)
+    cat_names: dict[int, str] = {}
 
+    for a in all_files:
+        aid = a["id"]
+        mod = a.get("fecha_modificacion") or ""
+        ext = (a.get("extension") or "").lower()
+        size = a.get("tamaño_bytes") or 0
+        cat_id = a.get("categoria_id")
 
-# ── R5: Sensitive filenames ───────────────────────────────────────────────────
+        # R2: old files
+        if mod and mod < cutoff_2y:
+            recs.append((aid, "R2", "Sin modificar desde hace más de 2 años", now_iso))
 
-
-def r5_sensitive_names():
-    for a in database.get_all_archivos():
+        # R5: sensitive names
         nombre_lower = a["nombre"].lower()
         for kw in SENSITIVE_KEYWORDS:
             if kw in nombre_lower:
-                database.insert_recomendacion(
-                    a["id"],
-                    "R5",
-                    f"Nombre sugiere contenido sensible (contiene '{kw}')",
-                )
+                recs.append((aid, "R5", f"Nombre sugiere contenido sensible (contiene '{kw}')", now_iso))
                 break
 
+        # R6: temp files
+        if ext in TEMP_EXTS:
+            recs.append((aid, "R6", "Archivo temporal, probablemente innecesario", now_iso))
 
-# ── R6: Temp / log / bak files ───────────────────────────────────────────────
-
-
-def r6_temp_files():
-    TEMP_EXTS = {".tmp", ".log", ".bak"}
-    for a in database.get_all_archivos():
-        if (a.get("extension") or "").lower() in TEMP_EXTS:
-            database.insert_recomendacion(
-                a["id"],
-                "R6",
-                "Archivo temporal, probablemente innecesario",
-            )
-
-
-# ── R7: Heavy video not recently used ────────────────────────────────────────
-
-
-def r7_heavy_video():
-    VIDEO_EXTS = {".mp4", ".mkv"}
-    SIZE_LIMIT = 500 * 1024 * 1024  # 500 MB
-    cutoff = (datetime.now() - timedelta(days=365)).isoformat()
-    for a in database.get_all_archivos():
-        ext = (a.get("extension") or "").lower()
-        size = a.get("tamaño_bytes") or 0
-        modified = a.get("fecha_modificacion") or ""
-        if ext in VIDEO_EXTS and size > SIZE_LIMIT and modified < cutoff:
+        # R7: heavy video not recently used
+        if ext in VIDEO_EXTS and size > VIDEO_SIZE_MIN and mod and mod < cutoff_1y:
             mb = size / (1024 * 1024)
-            database.insert_recomendacion(
-                a["id"],
-                "R7",
-                f"Vídeo pesado ({mb:.0f} MB) sin uso reciente (más de 1 año)",
-            )
+            recs.append((aid, "R7", f"Vídeo pesado ({mb:.0f} MB) sin uso reciente (más de 1 año)", now_iso))
+
+        # R4: accumulate category → folder mapping
+        if cat_id:
+            parent = str(Path(a["ruta_actual"]).parent)
+            cat_folders[cat_id].add(parent)
+            cat_file_ids[cat_id].append(aid)
+
+    # Fetch category names for R4 messages
+    if cat_folders:
+        conn = database.get_connection()
+        cur = conn.cursor()
+        cur.execute("SELECT id, nombre FROM categorias")
+        for row in cur.fetchall():
+            cat_names[row["id"]] = row["nombre"]
+        conn.close()
+
+    for cat_id, folders in cat_folders.items():
+        if len(folders) >= 3:
+            cat_name = cat_names.get(cat_id, str(cat_id))
+            n_files = len(cat_file_ids[cat_id])
+            n_folders = len(folders)
+            msg = f"{n_files} archivos de '{cat_name}' dispersos en {n_folders} carpetas"
+            for aid in cat_file_ids[cat_id]:
+                recs.append((aid, "R4", msg, now_iso))
+
+    database.insert_recomendaciones_batch(recs)

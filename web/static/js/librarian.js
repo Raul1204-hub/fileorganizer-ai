@@ -1,327 +1,343 @@
-/* Pixel-art librarian mascot — FileOrganizer AI */
+// Bib — pixel art librarian mascot  (16 × 23 cells, PX = 6 → 96 × 138 px)
 (function () {
-  'use strict';
+'use strict';
 
-  // ── Palette ────────────────────────────────────────────────────────────────
-  const _ = null;
-  const HA = '#2C1B0E'; // hair dark
-  const hA = '#57311A'; // hair mid
-  const SK = '#FBC99A'; // skin
-  const sk = '#C8724A'; // skin shadow / mouth
-  const GL = '#1C1C1C'; // glasses / eye
-  const JB = '#1E40AF'; // jacket blue
-  const BK = '#991B1B'; // book cover
-  const BP = '#FEF3C7'; // book page
-  const PN = '#111827'; // pants
-  const SH = '#030712'; // shoes
-  const TI = '#DC2626'; // tie
-  const SP = '#FDE68A'; // sparkle
+// ── Canvas dimensions ──────────────────────────────────────────────────────
+const PX = 6, W = 16, H = 23;
 
-  const PX = 5; // screen px per art px
-  const W  = 12;
-  const H  = 14;
+// ── Palette ────────────────────────────────────────────────────────────────
+const __ = null;
+const HA = '#3D1C0A'; // dark hair
+const hm = '#6B3A1F'; // hair mid
+const SK = '#FBCFA0'; // skin light
+const sk = '#C8724A'; // skin shadow / mouth
+const rx = '#F5A898'; // blush
+const EW = '#FAFAFA'; // eye white
+const EP = '#1C1C1C'; // pupil
+const GL = '#2A2A2A'; // glasses frame
+const WS = '#F8FAFC'; // white shirt
+const JB = '#1E3A8A'; // jacket dark blue
+const jm = '#2554C7'; // jacket highlight
+const BO = '#7F1D1D'; // book cover dark
+const bm = '#991B1B'; // book cover mid
+const BP = '#FEF9C3'; // book pages cream
+const TI = '#DC2626'; // tie red
+const PN = '#1F2937'; // pants
+const pm = '#374151'; // pants gap
+const SH = '#0F172A'; // shoes
+const sh = '#1F2937'; // shoe mid
 
-  // ── Frames ─────────────────────────────────────────────────────────────────
-  /* idle */
-  const I1 = [
-    [_,_,HA,HA,HA,HA,_,_,_,_,_,_],
-    [_,HA,SK,SK,SK,SK,hA,_,_,_,_,_],
-    [_,HA,GL,SK,GL,SK,hA,_,_,_,_,_],
-    [_,HA,SK,SK,SK,SK,hA,_,_,_,_,_],
-    [_,HA,SK,sk,SK,sk,hA,_,_,_,_,_],
-    [_,_,SK,JB,JB,SK,_,_,_,_,_,_],
-    [_,JB,JB,JB,JB,JB,JB,JB,_,_,_,_],
-    [JB,JB,JB,TI,JB,JB,JB,JB,_,_,_,_],
-    [SK,JB,JB,TI,BK,BK,JB,JB,SK,_,_,_],
-    [_,JB,JB,TI,BP,BK,JB,JB,_,_,_,_],
-    [_,JB,JB,JB,JB,JB,JB,_,_,_,_,_],
-    [_,_,PN,PN,PN,PN,_,_,_,_,_,_],
-    [_,_,PN,_,_,PN,_,_,_,_,_,_],
-    [_,_,SH,_,_,SH,_,_,_,_,_,_],
-  ];
-  /* idle blink */
-  const I2 = [
-    [_,_,HA,HA,HA,HA,_,_,_,_,_,_],
-    [_,HA,SK,SK,SK,SK,hA,_,_,_,_,_],
-    [_,HA,GL,SK,GL,SK,hA,_,_,_,_,_],
-    [_,HA,SK,SK,SK,SK,hA,_,_,_,_,_],
-    [_,HA,SK,sk,SK,sk,hA,_,_,_,_,_],
-    [_,_,SK,JB,JB,SK,_,_,_,_,_,_],
-    [_,JB,JB,JB,JB,JB,JB,JB,_,_,_,_],
-    [JB,JB,JB,TI,JB,JB,JB,JB,_,_,_,_],
-    [_,JB,JB,TI,BK,BK,JB,JB,SK,_,_,_],
-    [SK,JB,JB,TI,BP,BK,JB,JB,_,_,_,_],
-    [_,JB,JB,JB,JB,JB,JB,_,_,_,_,_],
-    [_,_,PN,PN,PN,PN,_,_,_,_,_,_],
-    [_,_,PN,_,_,PN,_,_,_,_,_,_],
-    [_,_,SH,_,_,SH,_,_,_,_,_,_],
-  ];
-  // blink = same as I1 but eyes replaced with flat lines
-  I2[2] = [_,HA,GL,GL,GL,GL,hA,_,_,_,_,_];
+// ── Head rows ─────────────────────────────────────────────────────────────
+const H0 = [__,__,__,HA,HA,HA,HA,HA,HA,HA,HA,HA,HA,__,__,__]; // hair dome
+const H1 = [__,__,HA,SK,SK,SK,SK,SK,SK,SK,SK,SK,HA,__,__,__]; // forehead
+const H2 = [__,HA,SK,SK,SK,SK,SK,SK,SK,SK,SK,SK,SK,HA,__,__]; // brow area
+const EO = [__,HA,GL,EW,EP,EW,GL,SK,GL,EW,EP,EW,GL,HA,__,__]; // eyes open
+const ER = [__,HA,GL,GL,GL,GL,GL,SK,GL,GL,GL,GL,GL,HA,__,__]; // glasses rim / blink
+const EQ = [__,HA,GL,sk,EP,sk,GL,SK,GL,sk,EP,sk,GL,HA,__,__]; // squint (working)
+const NN = [__,HA,SK,SK,sk,rx,SK,SK,SK,rx,sk,SK,SK,HA,__,__]; // nose + neutral cheeks
+const NH = [__,HA,SK,SK,sk,rx,rx,SK,SK,rx,rx,sk,SK,HA,__,__]; // happy blush
+const MN = [__,HA,SK,SK,SK,SK,sk,sk,sk,SK,SK,SK,SK,HA,__,__]; // mouth neutral
+const MY = [__,HA,SK,SK,sk,SK,SK,SK,SK,SK,SK,sk,SK,HA,__,__]; // smile
+const MS = [__,HA,SK,SK,SK,sk,sk,sk,SK,SK,SK,SK,SK,HA,__,__]; // frown
+const MO = [__,HA,SK,sk,SK,SK,rx,SK,SK,rx,SK,sk,SK,HA,__,__]; // surprised O
+const MT = [__,HA,SK,SK,SK,SK,SK,sk,sk,sk,SK,SK,SK,HA,__,__]; // thinking (shifted)
+const CN = [__,__,HA,SK,SK,SK,SK,SK,SK,SK,SK,SK,HA,__,__,__]; // chin
+const NK = [__,__,__,__,SK,SK,SK,SK,SK,SK,__,__,__,__,__,__]; // neck
 
-  /* working arm-left */
-  const WK1 = [
-    [_,_,HA,HA,HA,HA,_,_,_,_,_,_],
-    [_,HA,SK,SK,SK,SK,hA,_,_,_,_,_],
-    [_,HA,GL,sk,GL,sk,hA,_,_,_,_,_],
-    [_,HA,SK,SK,SK,SK,hA,_,_,_,_,_],
-    [_,HA,SK,sk,SK,sk,hA,_,_,_,_,_],
-    [_,_,SK,JB,JB,SK,_,_,_,_,_,_],
-    [SK,SK,JB,JB,JB,JB,JB,JB,_,_,_,_],
-    [SK,JB,JB,TI,JB,JB,JB,JB,_,_,_,_],
-    [_,JB,JB,TI,BK,BK,JB,JB,SK,_,_,_],
-    [_,JB,JB,TI,BP,BK,JB,JB,_,_,_,_],
-    [_,JB,JB,JB,JB,JB,JB,_,_,_,_,_],
-    [_,_,PN,PN,PN,PN,_,_,_,_,_,_],
-    [_,_,PN,_,_,PN,_,_,_,_,_,_],
-    [_,_,SH,_,_,SH,_,_,_,_,_,_],
-  ];
-  /* working arm-right */
-  const WK2 = [
-    [_,_,HA,HA,HA,HA,_,_,_,_,_,_],
-    [_,HA,SK,SK,SK,SK,hA,_,_,_,_,_],
-    [_,HA,GL,sk,GL,sk,hA,_,_,_,_,_],
-    [_,HA,SK,SK,SK,SK,hA,_,_,_,_,_],
-    [_,HA,SK,sk,SK,sk,hA,_,_,_,_,_],
-    [_,_,SK,JB,JB,SK,_,_,_,_,_,_],
-    [_,JB,JB,JB,JB,JB,JB,SK,SK,_,_,_],
-    [JB,JB,JB,TI,JB,JB,JB,JB,SK,_,_,_],
-    [SK,JB,JB,TI,BK,BK,JB,JB,_,_,_,_],
-    [_,JB,JB,TI,BP,BK,JB,JB,_,_,_,_],
-    [_,JB,JB,JB,JB,JB,JB,_,_,_,_,_],
-    [_,_,PN,PN,PN,PN,_,_,_,_,_,_],
-    [_,_,PN,_,_,PN,_,_,_,_,_,_],
-    [_,_,SH,_,_,SH,_,_,_,_,_,_],
-  ];
-  /* working head-tilt */
-  const WK3 = [
-    [_,_,_,HA,HA,HA,HA,_,_,_,_,_],
-    [_,_,HA,SK,SK,SK,SK,hA,_,_,_,_],
-    [_,_,HA,GL,sk,GL,sk,hA,_,_,_,_],
-    [_,_,HA,SK,SK,SK,SK,hA,_,_,_,_],
-    [_,_,HA,SK,sk,SK,sk,hA,_,_,_,_],
-    [_,_,_,SK,JB,JB,SK,_,_,_,_,_],
-    [_,JB,JB,JB,JB,JB,JB,JB,_,_,_,_],
-    [JB,JB,JB,TI,JB,JB,JB,JB,_,_,_,_],
-    [SK,JB,JB,TI,BK,BK,JB,JB,SK,_,_,_],
-    [_,JB,JB,TI,BP,BK,JB,JB,_,_,_,_],
-    [_,JB,JB,JB,JB,JB,JB,_,_,_,_,_],
-    [_,_,PN,PN,PN,PN,_,_,_,_,_,_],
-    [_,_,PN,_,_,PN,_,_,_,_,_,_],
-    [_,_,SH,_,_,SH,_,_,_,_,_,_],
-  ];
+// ── Head presets (9 rows each) ────────────────────────────────────────────
+const HDI = [H0,H1,H2,EO,ER,NN,MN,CN,NK];
+const HDB = [H0,H1,H2,ER,ER,NN,MN,CN,NK]; // blink
+const HDW = [H0,H1,H2,EQ,ER,NN,MN,CN,NK]; // working focused
+const HDH = [H0,H1,H2,EO,ER,NH,MY,CN,NK]; // happy
+const HDS = [H0,H1,H2,EO,ER,NN,MS,CN,NK]; // sad
+const HDT = [H0,H1,H2,EO,ER,NN,MT,CN,NK]; // thinking
+const HDX = [H0,H1,H2,EO,ER,NH,MO,CN,NK]; // surprised
 
-  /* happy — arms out, smile */
-  const HP1 = [
-    [_,_,HA,HA,HA,HA,_,_,_,_,_,_],
-    [_,HA,SK,SK,SK,SK,hA,_,_,_,_,_],
-    [_,HA,GL,SK,GL,SK,hA,_,_,_,_,_],
-    [_,HA,SK,SK,SK,SK,hA,_,_,_,_,_],
-    [_,HA,sk,SK,SK,sk,hA,_,_,_,_,_],
-    [_,_,SK,JB,JB,SK,_,_,_,_,_,_],
-    [SK,JB,JB,JB,JB,JB,JB,SK,_,_,_,_],
-    [_,JB,JB,TI,JB,JB,JB,_,_,_,_,_],
-    [_,JB,JB,TI,JB,JB,JB,_,_,_,_,_],
-    [_,JB,JB,JB,JB,JB,JB,_,_,_,_,_],
-    [_,_,PN,PN,PN,PN,_,_,_,_,_,_],
-    [_,_,PN,_,_,PN,_,_,_,_,_,_],
-    [_,_,SH,_,_,SH,_,_,_,_,_,_],
-    [_,_,_,_,_,_,_,_,_,_,_,_],
-  ];
-  /* happy — jump frame with sparkles */
-  const HP2 = [
-    [SP,_,HA,HA,HA,HA,_,SP,_,_,_,_],
-    [_,HA,SK,SK,SK,SK,hA,_,_,_,_,_],
-    [_,HA,GL,SK,GL,SK,hA,_,_,_,_,_],
-    [_,HA,SK,SK,SK,SK,hA,_,_,_,_,_],
-    [_,HA,sk,SK,SK,sk,hA,_,_,_,_,_],
-    [_,_,SK,JB,JB,SK,_,_,_,_,_,_],
-    [SK,JB,JB,JB,JB,JB,JB,SK,_,_,_,_],
-    [_,JB,JB,TI,JB,JB,JB,_,_,_,_,_],
-    [_,JB,JB,TI,JB,JB,JB,_,_,_,_,_],
-    [_,JB,JB,JB,JB,JB,JB,_,_,_,_,_],
-    [_,_,PN,PN,PN,PN,_,_,_,_,_,_],
-    [_,_,_,PN,PN,_,_,_,_,_,_,_],
-    [_,_,_,SH,SH,_,_,_,_,_,_,_],
-    [_,_,_,_,_,_,_,_,_,_,_,_],
-  ];
+// ── Arm / torso variants (7 rows each) ────────────────────────────────────
+const AB = [   // holding book
+  [__,__,__,JB,JB,WS,WS,TI,TI,WS,WS,JB,JB,__,__,__],
+  [__,__,JB,JB,WS,WS,WS,TI,TI,WS,WS,WS,JB,JB,__,__],
+  [__,jm,JB,JB,WS,WS,WS,TI,TI,WS,WS,WS,JB,JB,jm,__],
+  [__,JB,JB,JB,BO,BO,WS,TI,TI,WS,bm,bm,JB,JB,JB,__],
+  [SK,JB,JB,JB,BO,BP,WS,TI,TI,WS,BP,bm,JB,JB,JB,SK],
+  [SK,JB,JB,JB,BO,BP,WS,TI,TI,WS,BP,bm,JB,JB,JB,SK],
+  [__,jm,JB,JB,BO,BO,WS,TI,TI,WS,bm,bm,JB,JB,jm,__],
+];
+const AB2 = [  // book slightly shifted
+  [__,__,__,JB,JB,WS,WS,TI,TI,WS,WS,JB,JB,__,__,__],
+  [__,__,JB,JB,WS,WS,WS,TI,TI,WS,WS,WS,JB,JB,__,__],
+  [__,jm,JB,JB,WS,WS,WS,TI,TI,WS,WS,WS,JB,JB,jm,__],
+  [__,JB,JB,JB,BO,BO,WS,TI,TI,WS,bm,bm,JB,JB,JB,__],
+  [__,SK,JB,JB,BO,BP,WS,TI,TI,WS,BP,bm,JB,JB,SK,__],
+  [SK,JB,JB,JB,BO,BP,WS,TI,TI,WS,BP,bm,JB,JB,JB,SK],
+  [__,jm,JB,JB,BO,BO,WS,TI,TI,WS,bm,bm,JB,JB,jm,__],
+];
+const AWL = [  // arm reaching left
+  [__,__,__,JB,JB,WS,WS,TI,TI,WS,WS,JB,JB,__,__,__],
+  [SK,jm,JB,JB,WS,WS,WS,TI,TI,WS,WS,WS,JB,JB,jm,__],
+  [SK,JB,JB,JB,WS,WS,WS,TI,TI,WS,WS,WS,JB,JB,JB,__],
+  [SK,SK,JB,JB,JB,JB,WS,TI,TI,WS,bm,bm,JB,JB,JB,__],
+  [SK,SK,JB,JB,JB,JB,WS,TI,TI,WS,BP,bm,JB,JB,JB,SK],
+  [__,SK,JB,JB,JB,JB,WS,TI,TI,WS,BP,bm,JB,JB,JB,SK],
+  [__,jm,JB,JB,JB,JB,WS,TI,TI,WS,bm,bm,JB,JB,jm,__],
+];
+const AWR = [  // arm reaching right
+  [__,__,__,JB,JB,WS,WS,TI,TI,WS,WS,JB,JB,__,__,__],
+  [__,jm,JB,JB,WS,WS,WS,TI,TI,WS,WS,WS,JB,JB,jm,SK],
+  [__,JB,JB,JB,WS,WS,WS,TI,TI,WS,WS,WS,JB,JB,JB,SK],
+  [__,JB,JB,JB,BO,BO,WS,TI,TI,WS,JB,JB,JB,JB,SK,SK],
+  [SK,JB,JB,JB,BO,BP,WS,TI,TI,WS,JB,JB,JB,JB,SK,SK],
+  [SK,JB,JB,JB,BO,BP,WS,TI,TI,WS,JB,JB,JB,JB,SK,__],
+  [__,jm,JB,JB,BO,BO,WS,TI,TI,WS,JB,JB,JB,JB,jm,__],
+];
+const AHP = [  // happy: arms raised
+  [__,__,__,JB,JB,WS,WS,TI,TI,WS,WS,JB,JB,__,__,__],
+  [SK,jm,JB,JB,WS,WS,WS,TI,TI,WS,WS,WS,JB,JB,jm,SK],
+  [SK,JB,JB,JB,JB,WS,WS,TI,TI,WS,WS,JB,JB,JB,JB,SK],
+  [__,JB,JB,JB,JB,JB,WS,TI,TI,WS,JB,JB,JB,JB,JB,__],
+  [__,__,JB,JB,JB,JB,WS,TI,TI,WS,JB,JB,JB,JB,__,__],
+  [__,__,JB,JB,JB,JB,WS,TI,TI,WS,JB,JB,JB,JB,__,__],
+  [__,__,JB,JB,JB,JB,JB,JB,JB,JB,JB,JB,JB,JB,__,__],
+];
+const ASD = [  // sad: arms drooped
+  [__,__,__,JB,JB,WS,WS,TI,TI,WS,WS,JB,JB,__,__,__],
+  [__,__,JB,JB,WS,WS,WS,TI,TI,WS,WS,WS,JB,JB,__,__],
+  [__,__,JB,JB,WS,WS,WS,TI,TI,WS,WS,WS,JB,JB,__,__],
+  [__,jm,JB,JB,JB,JB,WS,TI,TI,WS,JB,JB,JB,JB,jm,__],
+  [SK,JB,JB,JB,JB,JB,WS,TI,TI,WS,JB,JB,JB,JB,JB,SK],
+  [SK,SK,JB,JB,JB,JB,WS,TI,TI,WS,JB,JB,JB,JB,SK,SK],
+  [__,jm,JB,JB,JB,JB,JB,JB,JB,JB,JB,JB,JB,JB,jm,__],
+];
 
-  /* sad — arms low, frown */
-  const SD1 = [
-    [_,_,HA,HA,HA,HA,_,_,_,_,_,_],
-    [_,HA,SK,SK,SK,SK,hA,_,_,_,_,_],
-    [_,HA,GL,SK,GL,SK,hA,_,_,_,_,_],
-    [_,HA,SK,SK,SK,SK,hA,_,_,_,_,_],
-    [_,HA,SK,SK,sk,SK,hA,_,_,_,_,_],
-    [_,_,SK,JB,JB,SK,_,_,_,_,_,_],
-    [_,_,JB,JB,JB,JB,JB,_,_,_,_,_],
-    [_,JB,JB,TI,JB,JB,JB,JB,_,_,_,_],
-    [SK,JB,JB,TI,JB,JB,JB,JB,SK,_,_,_],
-    [SK,JB,JB,JB,JB,JB,JB,SK,_,_,_,_],
-    [_,JB,JB,JB,JB,JB,JB,_,_,_,_,_],
-    [_,_,PN,PN,PN,PN,_,_,_,_,_,_],
-    [_,_,PN,_,_,PN,_,_,_,_,_,_],
-    [_,_,SH,_,_,SH,_,_,_,_,_,_],
-  ];
+// ── Lower body (rows 16-22, constant) ─────────────────────────────────────
+const LO = [
+  [__,__,JB,JB,JB,JB,JB,JB,JB,JB,JB,JB,JB,JB,__,__],
+  [__,__,__,JB,JB,JB,JB,JB,JB,JB,JB,JB,JB,__,__,__],
+  [__,__,__,PN,PN,PN,PN,PN,PN,PN,PN,PN,PN,__,__,__],
+  [__,__,__,PN,PN,pm,__,__,__,__,pm,PN,PN,__,__,__],
+  [__,__,__,PN,PN,pm,__,__,__,__,pm,PN,PN,__,__,__],
+  [__,__,__,PN,PN,pm,__,__,__,__,pm,PN,PN,__,__,__],
+  [__,__,SH,SH,SH,SH,sh,__,__,sh,SH,SH,SH,SH,__,__],
+];
 
-  /* thinking — hand on chin */
-  const TH1 = [
-    [_,_,HA,HA,HA,HA,_,_,_,_,_,_],
-    [_,HA,SK,SK,SK,SK,hA,_,_,_,_,_],
-    [_,HA,GL,SK,GL,SK,hA,_,_,_,_,_],
-    [_,HA,SK,SK,SK,SK,hA,_,_,_,_,_],
-    [_,HA,SK,sk,SK,_,hA,_,_,_,_,_],
-    [_,SK,SK,JB,JB,SK,_,_,_,_,_,_],
-    [_,JB,JB,JB,JB,JB,JB,JB,_,_,_,_],
-    [_,JB,JB,TI,JB,JB,JB,JB,_,_,_,_],
-    [SK,JB,JB,TI,JB,JB,JB,JB,SK,_,_,_],
-    [_,JB,JB,TI,JB,JB,JB,_,_,_,_,_],
-    [_,JB,JB,JB,JB,JB,JB,_,_,_,_,_],
-    [_,_,PN,PN,PN,PN,_,_,_,_,_,_],
-    [_,_,PN,_,_,PN,_,_,_,_,_,_],
-    [_,_,SH,_,_,SH,_,_,_,_,_,_],
-  ];
+// ── Frame factory ─────────────────────────────────────────────────────────
+function mk(head, arms) { return [...head, ...arms, ...LO]; }
 
-  // ── State config ───────────────────────────────────────────────────────────
-  const STATES = {
-    idle:     { frames: [I1, I2, I1, I1], fps: 1.2, loop: true },
-    working:  { frames: [WK1, WK2, WK3, WK2], fps: 5, loop: true },
-    happy:    { frames: [HP1, HP2, HP1, HP2], fps: 2.5, loop: true },
-    sad:      { frames: [SD1], fps: 0, loop: false },
-    thinking: { frames: [TH1], fps: 0, loop: false },
-  };
+const FI1 = mk(HDI, AB);
+const FI2 = mk(HDI, AB2);
+const FI3 = mk(HDB, AB);
+const FW1 = mk(HDW, AWL);
+const FW2 = mk(HDW, AWR);
+const FW3 = mk(HDW, AB);
+const FH1 = mk(HDH, AHP);
+const FS  = mk(HDS, ASD);
+const FT  = mk(HDT, AB);
+const FX  = mk(HDX, AHP);
 
-  // ── Page messages ──────────────────────────────────────────────────────────
-  const MSGS = {
-    idle: {
-      '/':                ['¿Listo para organizar?', '¡Escanea tu colección!'],
-      '/dashboard':       ['¡Aquí están tus estadísticas!', '¿Qué analizamos hoy?'],
-      '/plan':            ['Vamos a planificar', 'Sin tocar el disco todavía'],
-      '/recomendaciones': ['Tengo sugerencias para ti', '¡Hay cosas por mejorar!'],
-      '/chat':            ['Pregúntame lo que quieras', '¿En qué puedo ayudarte?'],
-      '/explorar':        ['¡Explora tu colección!', 'Todos tus archivos aquí'],
-      '/organizar':       ['Organicemos tus archivos', '¿Cómo quieres ordenarlos?'],
-      '/duplicados':      ['Busco duplicados para ti', '¡Recupera espacio en disco!'],
-      '/historial':       ['Aquí está tu historial', 'Todo queda registrado'],
-      '/backup':          ['Tus copias de seguridad', '¡Siempre puedes deshacer!'],
-      '/vigilancia':      ['Estoy vigilando tu carpeta', '¡Nada se me escapa!'],
-      default:            ['¿En qué puedo ayudarte?', '¡Estoy aquí para ayudar!'],
-    },
-    working: ['Trabajando en ello…', 'Un momento por favor…', 'Procesando…'],
-    happy:   ['¡Todo en orden!', '¡Hecho con éxito!', '¡Misión completada!'],
-    sad:     ['Algo salió mal…', 'Hay errores pendientes', 'Revisa los detalles'],
-    thinking: ['Déjame pensar…', 'Hmm…', '¿Qué haremos hoy?'],
-  };
+// ── Animation configs ─────────────────────────────────────────────────────
+const STATES = {
+  idle:      { fr: [FI1,FI2,FI1,FI3], fps: 1.0, loop: true,  yo: [0,0,0,0] },
+  working:   { fr: [FW1,FW2,FW3,FW2], fps: 5,   loop: true,  yo: [0,0,0,0] },
+  happy:     { fr: [FH1,FH1],          fps: 3,   loop: true,  yo: [0,-2]    },
+  sad:       { fr: [FS],               fps: 0,   loop: false, yo: [0]        },
+  thinking:  { fr: [FT],               fps: 0,   loop: false, yo: [0]        },
+  surprised: { fr: [FX],               fps: 0,   loop: false, yo: [-2]       },
+};
 
-  // ── Render ─────────────────────────────────────────────────────────────────
-  let _canvas, _ctx, _state = 'idle', _frameIdx = 0, _lastTs = 0, _rafId = null;
-  let _bubble, _bubbleTimer = null;
-  let _variant = 'default';
+// ── Idle thoughts (hardcoded Spanish, no external APIs) ───────────────────
+const THOUGHTS = [
+  '¿Dónde habrás puesto ese PDF de 2018…?',
+  'Un archivo sin nombre es un secreto perdido.',
+  'La entropía siempre gana… a menos que me tengas a mí.',
+  'El 73 % del caos digital es completamente opcional.',
+  'Los duplicados son como el eco del universo. Inútiles pero poéticos.',
+  'El primer archivo era una tablilla de arcilla. Sin Ctrl+F. Horror.',
+  'Clasifico, luego existo.',
+  'Una carpeta «misc» es la antesala del olvido.',
+  '¿«temp»? Ningún archivo temp es temporal. Lo sé.',
+  'Un buen nombre de archivo vale más que mil capturas de pantalla.',
+  'He visto 47 versiones del mismo contrato. Mi trauma es real.',
+  'La carpeta «Escritorio» debería llamarse «El purgatorio».',
+  'Organizar es un acto de amor hacia tu yo futuro.',
+  'Hay 3 tipos de archivos: útiles, posiblemente útiles… y mentiras.',
+  'En algún lugar hay un PDF importante. Lo encontraré.',
+  'El conocimiento sin orden es ruido con buenas intenciones.',
+  'Soy el guardián del caos digitalmente encadenado.',
+  'Hoy es un buen día para reindexar.',
+  '¿Sabías que menos archivos no te hace menos persona?',
+  'Archivé mi soledad en /Documentos/Secretos. Contraseña: ••••••',
+  'El 80 % de los adjuntos de email nunca se vuelven a abrir.',
+  'Mis gafas no son de adorno. Veo absolutamente todo.',
+  '«Por si acaso» es el origen de todos los males.',
+];
 
-  function _draw(frame) {
-    if (!_ctx) return;
-    _ctx.clearRect(0, 0, W * PX, H * PX);
-    for (let r = 0; r < frame.length; r++) {
-      for (let c = 0; c < frame[r].length; c++) {
-        const col = frame[r][c];
-        if (col) {
-          _ctx.fillStyle = col;
-          _ctx.fillRect(c * PX, r * PX, PX, PX);
-        }
-      }
+const GREETINGS = [
+  '¡Hola! ¿En qué puedo ayudarte?',
+  '¡Aquí estoy! Listo para organizar.',
+  '¿Buscas algo? ¡Pregúntame!',
+  '¡Buenos días! O tardes. O noches.',
+  '¡Presente! Archivos a la orden.',
+  '¡Me has pillado pensando! ¿Qué necesitas?',
+  '¿Más archivos para clasificar? ¡Perfecto!',
+];
+
+const PAGE_MSGS = {
+  '/':         ['Dashboard cargado.', 'Vista general lista.', '¡Bienvenido de nuevo!'],
+  '/scan':     ['Listo para escanear.', '¡A por esos archivos!', 'Escáner en espera.'],
+  '/chat':     ['¡Pregúntame lo que quieras!', 'Chat IA activado.', 'Soy todo oídos.'],
+  '/plan':     ['Plan de organización.', '¡Vamos a ordenar esto!'],
+  '/archivos': ['Explorando archivos.', 'Biblioteca cargada.'],
+  '/explorar': ['Explorador listo.', 'Todos a la vista.'],
+  '/dashboard':['Analítica lista.', 'Estadísticas cargadas.'],
+};
+
+// ── Module state ──────────────────────────────────────────────────────────
+let _state      = 'idle';
+let _frameIdx   = 0;
+let _frameTick  = 0;
+let _lastTs     = 0;
+let _bubble     = null;
+let _bubbleTmr  = null;
+let _thoughtTmr = null;
+const _canvases = [];
+
+// ── Canvas setup ──────────────────────────────────────────────────────────
+function mountCanvas(el, px) {
+  const p   = px || PX;
+  const dpr = window.devicePixelRatio || 1;
+  el.width  = W * p * dpr;
+  el.height = H * p * dpr;
+  el.style.width  = (W * p) + 'px';
+  el.style.height = (H * p) + 'px';
+  const ctx = el.getContext('2d');
+  ctx.imageSmoothingEnabled = false;
+  ctx.scale(dpr, dpr);
+  return { el, ctx, px: p };
+}
+
+// ── Draw ──────────────────────────────────────────────────────────────────
+function paint(entry, frame, yOff) {
+  const { ctx, px } = entry;
+  ctx.clearRect(0, 0, entry.el.width, entry.el.height);
+  const oy = (yOff || 0) * px;
+  for (let r = 0; r < frame.length; r++) {
+    const row = frame[r];
+    for (let c = 0; c < W; c++) {
+      const col = row[c];
+      if (col) { ctx.fillStyle = col; ctx.fillRect(c * px, oy + r * px, px, px); }
+    }
+  }
+}
+
+// ── RAF loop ──────────────────────────────────────────────────────────────
+function tick(ts) {
+  requestAnimationFrame(tick);
+  const cfg = STATES[_state] || STATES.idle;
+  const dt  = ts - _lastTs;
+  _lastTs   = ts;
+
+  if (cfg.fps > 0 && cfg.fr.length > 1) {
+    _frameTick += dt;
+    const intv = 1000 / cfg.fps;
+    if (_frameTick >= intv) {
+      _frameTick -= intv;
+      _frameIdx = cfg.loop
+        ? (_frameIdx + 1) % cfg.fr.length
+        : Math.min(_frameIdx + 1, cfg.fr.length - 1);
     }
   }
 
-  function _tick(ts) {
-    const cfg = STATES[_state] || STATES.idle;
-    const interval = cfg.fps > 0 ? 1000 / cfg.fps : Infinity;
-    if (ts - _lastTs >= interval) {
-      if (cfg.loop || _frameIdx < cfg.frames.length - 1) {
-        _frameIdx = (_frameIdx + 1) % cfg.frames.length;
-      }
-      _draw(cfg.frames[_frameIdx]);
-      _lastTs = ts;
-    }
-    _rafId = requestAnimationFrame(_tick);
+  const frame = cfg.fr[_frameIdx] || cfg.fr[0];
+  const yOff  = (cfg.yo || [])[_frameIdx] || 0;
+  for (const c of _canvases) paint(c, frame, yOff);
+}
+
+// ── Bubble ────────────────────────────────────────────────────────────────
+function showBubble(text, type) {
+  if (!_bubble) return;
+  clearTimeout(_bubbleTmr);
+  _bubble.textContent = text;
+  _bubble.className   = 'lib-bubble-' + (type || 'speech') + ' visible';
+  _bubbleTmr = setTimeout(
+    () => _bubble.classList.remove('visible'),
+    type === 'thought' ? 7000 : 5000
+  );
+}
+
+// ── Idle thoughts ─────────────────────────────────────────────────────────
+function scheduleThought() {
+  clearTimeout(_thoughtTmr);
+  _thoughtTmr = setTimeout(fireThought, 22000 + Math.random() * 18000);
+}
+
+function fireThought() {
+  if (_state !== 'idle') { scheduleThought(); return; }
+  _state = 'thinking'; _frameIdx = 0;
+  showBubble(THOUGHTS[Math.floor(Math.random() * THOUGHTS.length)], 'thought');
+  setTimeout(() => {
+    if (_state === 'thinking') { _state = 'idle'; _frameIdx = 0; }
+    scheduleThought();
+  }, 7500);
+}
+
+// ── Public API ────────────────────────────────────────────────────────────
+window.librarianSetState = function (state, msg) {
+  if (!STATES[state]) return;
+  _state = state; _frameIdx = 0; _frameTick = 0;
+  clearTimeout(_thoughtTmr);
+  if (msg) {
+    showBubble(msg, 'speech');
+  } else if (_bubble) {
+    _bubble.classList.remove('visible');
   }
+  if (state === 'idle') scheduleThought();
+};
 
-  function _pickMsg(state) {
-    const path = window.location.pathname;
-    if (state === 'idle') {
-      const pool = MSGS.idle[path] || MSGS.idle.default;
-      return pool[Math.floor(Math.random() * pool.length)];
-    }
-    const pool = MSGS[state] || MSGS.idle.default;
-    return pool[Math.floor(Math.random() * pool.length)];
-  }
+window.librarianMount = function (el, px) {
+  if (el) _canvases.push(mountCanvas(el, px || PX));
+};
 
-  function _showBubble(text) {
-    if (!_bubble) return;
-    _bubble.textContent = text;
-    _bubble.classList.remove('lib-bubble-hide');
-    _bubble.classList.add('lib-bubble-show');
-    clearTimeout(_bubbleTimer);
-    _bubbleTimer = setTimeout(() => {
-      _bubble.classList.remove('lib-bubble-show');
-      _bubble.classList.add('lib-bubble-hide');
-    }, 5000);
-  }
+// ── Init ──────────────────────────────────────────────────────────────────
+document.addEventListener('DOMContentLoaded', () => {
+  const sidebar = document.getElementById('lib-canvas');
+  if (sidebar) _canvases.push(mountCanvas(sidebar, PX));
 
-  // ── Public API ─────────────────────────────────────────────────────────────
-  window.librarianSetState = function (state, msg) {
-    if (!STATES[state]) return;
-    _state = state;
-    _frameIdx = 0;
-    _lastTs = 0;
-    _showBubble(msg || _pickMsg(state));
-  };
-
-  // ── Init ───────────────────────────────────────────────────────────────────
-  document.addEventListener('DOMContentLoaded', () => {
-    _canvas = document.getElementById('lib-canvas');
-    _bubble = document.getElementById('lib-bubble');
-    if (!_canvas) return;
-
-    const ratio = Math.min(window.devicePixelRatio || 1, 2);
-    _canvas.width  = W * PX * ratio;
-    _canvas.height = H * PX * ratio;
-    _canvas.style.width  = W * PX + 'px';
-    _canvas.style.height = H * PX + 'px';
-    _ctx = _canvas.getContext('2d');
-    _ctx.imageSmoothingEnabled = false;
-    _ctx.scale(ratio, ratio);
-
-    _draw(STATES.idle.frames[0]);
-    _rafId = requestAnimationFrame(_tick);
-
-    // Show greeting after 800ms
-    setTimeout(() => _showBubble(_pickMsg('idle')), 800);
-
-    // Click = random greeting
-    _canvas.style.cursor = 'pointer';
-    _canvas.addEventListener('click', () => {
-      if (_state === 'idle') _showBubble(_pickMsg('idle'));
-    });
-
-    // Wire scan events from base.html
-    const _origApply = window._applyState;
-    if (typeof _origApply === 'function') {
-      window._applyState = function (s) {
-        _origApply(s);
-        if (s.running) {
-          librarianSetState('working', s.fase === 'analizando'
-            ? 'Analizando con IA…' : 'Escaneando archivos…');
-        } else if (s.fase === 'completado') {
-          const failed = ((s.summary || {}).fallos_extraccion || 0)
-                       + ((s.summary || {}).fallos_ollama || 0);
-          librarianSetState(failed ? 'sad' : 'happy',
-            failed ? `¡Completado con ${failed} fallos!` : '¡Escaneo completado!');
-          setTimeout(() => librarianSetState('idle'), 4000);
-        } else if (s.fase === 'error') {
-          librarianSetState('sad', 'Algo salió mal…');
-          setTimeout(() => librarianSetState('idle'), 4000);
-        }
-      };
-    }
+  document.querySelectorAll('[data-lib-canvas]').forEach(el => {
+    _canvases.push(mountCanvas(el, parseInt(el.dataset.libPx, 10) || PX));
   });
+
+  _bubble = document.getElementById('lib-bubble');
+
+  sidebar?.addEventListener('click', () => {
+    const widget = document.getElementById('lib-widget');
+    widget?.classList.add('lib-jump');
+    setTimeout(() => widget?.classList.remove('lib-jump'), 700);
+    clearTimeout(_thoughtTmr);
+    librarianSetState('surprised', GREETINGS[Math.floor(Math.random() * GREETINGS.length)]);
+    setTimeout(() => librarianSetState('idle'), 4000);
+  });
+
+  // Page greeting
+  const path = window.location.pathname;
+  const key  = Object.keys(PAGE_MSGS).find(k => path === k || path.startsWith(k + '/')) || '/';
+  const msgs = PAGE_MSGS[key] || PAGE_MSGS['/'];
+  setTimeout(() => showBubble(msgs[Math.floor(Math.random() * msgs.length)], 'speech'), 900);
+
+  // Hook scan state changes (defined in base.html)
+  const origApply = window._applyState;
+  if (typeof origApply === 'function') {
+    window._applyState = function (s) {
+      origApply(s);
+      if      (s.running && s.fase === 'escaneando')      librarianSetState('working', 'Escaneando archivos…');
+      else if (s.running && s.fase === 'analizando')      librarianSetState('working', 'Analizando con IA…');
+      else if (!s.running && s.fase === 'completado')     librarianSetState('happy',   '¡Escaneo completado!');
+      else if (!s.running && s.fase === 'error')          librarianSetState('sad',     'Vaya, algo falló.');
+    };
+  }
+
+  _lastTs = performance.now();
+  requestAnimationFrame(tick);
+  scheduleThought();
+});
+
 })();

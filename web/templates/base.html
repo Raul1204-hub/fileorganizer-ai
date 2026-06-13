@@ -513,6 +513,7 @@
   // ── Scan progress ──────────────────────────────────────────────────────────
   const FASE_LABELS = {
     escaneando:      'Escaneando archivos',
+    reconciliando:   'Indexando base de datos',
     hasheando:       'Hasheando',
     analizando:      'Analizando con IA',
     recomendaciones: 'Generando recomendaciones',
@@ -523,6 +524,7 @@
 
   const FASE_ICONS = {
     escaneando:      'fa-magnifying-glass',
+    reconciliando:   'fa-database',
     hasheando:       'fa-hashtag',
     analizando:      'fa-brain',
     recomendaciones: 'fa-wand-magic-sparkles',
@@ -604,14 +606,16 @@
       ind.classList.remove('hidden'); ind.classList.add('flex');
       panel.classList.remove('hidden');
 
-      const label = FASE_LABELS[s.fase] || s.fase;
-      const iconClass = FASE_ICONS[s.fase] || 'fa-spinner';
+      const cancelling = s.cancelled && s.running;
+      const label = cancelling ? 'Cancelando…' : (FASE_LABELS[s.fase] || s.fase);
+      const iconClass = cancelling ? 'fa-circle-stop' : (FASE_ICONS[s.fase] || 'fa-spinner');
       indTxt.textContent = label;
       spFase.textContent = label;
 
       // Update phase icon (keep fa-spin only for active phases)
-      const spinning = ['escaneando','hasheando','analizando','recomendaciones'].includes(s.fase);
-      spIcon.className = 'fa-solid ' + iconClass + ' text-indigo-400 text-xs' + (spinning ? ' fa-spin' : '');
+      const spinning = !cancelling && ['escaneando','reconciliando','hasheando','analizando','recomendaciones'].includes(s.fase);
+      const iconColor = cancelling ? 'text-rose-400' : 'text-indigo-400';
+      spIcon.className = 'fa-solid ' + iconClass + ' ' + iconColor + ' text-xs' + (spinning ? ' fa-spin' : '');
 
       const pct = s.total > 0 ? Math.round((s.hechos / s.total) * 100) : 0;
       spBar.style.width = (s.total > 0 ? pct : 0) + '%';

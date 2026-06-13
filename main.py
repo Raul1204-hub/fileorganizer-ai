@@ -116,6 +116,8 @@ def cli_scan(target_path: str) -> None:
             fecha_modificacion=f["fecha_modificacion"],
             hash_blake2=h,
             categoria_id=f["categoria_id"],
+            fecha_acceso=f.get("fecha_acceso"),
+            fecha_creacion=f.get("fecha_creacion"),
         )
         database.insert_historial(aid, None, f["ruta_actual"], "indexar")
         if f["extension"] in scanner.DOC_EXTS:
@@ -146,6 +148,8 @@ def cli_scan(target_path: str) -> None:
             fecha_modificacion=f["fecha_modificacion"],
             hash_blake2=h,
             categoria_id=f["categoria_id"],
+            fecha_acceso=f.get("fecha_acceso"),
+            fecha_creacion=f.get("fecha_creacion"),
         )
         database.insert_historial(f["db_id"], f["ruta_actual"], f["ruta_actual"], "actualizar")
         database.clear_etiquetas_archivo(f["db_id"])
