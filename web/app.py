@@ -242,9 +242,7 @@ def backup():
 
 @app.route("/chat")
 def chat_page():
-    historial = database.get_chat_historial(limit=10)
-    historial.reverse()
-    return render_template("chat.html", historial=historial)
+    return render_template("chat.html")
 
 
 # ── Chat API ──────────────────────────────────────────────────────────────────
@@ -256,8 +254,62 @@ def chat_query():
     question = (data.get("question") or "").strip()
     if not question:
         return jsonify({"error": "Pregunta vacía"}), 400
-    result = chat_module.chat_query(question)
+
+    conv_id = data.get("conversacion_id")
+
+    # Auto-create conversation on first message
+    if not conv_id:
+        titulo = question[:60].strip()
+        conv_id = database.create_conversacion(titulo)
+
+    result = chat_module.chat_query(question, conversacion_id=conv_id)
+    database.update_conversacion_actividad(conv_id)
+
+    # Auto-title: if it's the first exchange, set title from question
+    conv = database.get_conversacion(conv_id)
+    if conv and conv["titulo"] == "Nueva conversación":
+        database.update_conversacion_titulo(conv_id, question[:60])
+
+    result["conversacion_id"] = conv_id
     return jsonify(result)
+
+
+# ── Conversations API ─────────────────────────────────────────────────────────
+
+
+@app.route("/api/conversaciones")
+def api_conversaciones():
+    return jsonify(database.get_conversaciones())
+
+
+@app.route("/api/conversaciones", methods=["POST"])
+def api_crear_conversacion():
+    titulo = (request.get_json() or {}).get("titulo", "Nueva conversación")
+    conv_id = database.create_conversacion(titulo)
+    return jsonify({"id": conv_id, "titulo": titulo})
+
+
+@app.route("/api/conversaciones/<int:conv_id>/mensajes")
+def api_mensajes_conversacion(conv_id):
+    mensajes = database.get_mensajes_conversacion(conv_id)
+    return jsonify(mensajes)
+
+
+@app.route("/api/conversaciones/<int:conv_id>", methods=["PATCH"])
+def api_actualizar_conversacion(conv_id):
+    data = request.get_json() or {}
+    if "titulo" in data:
+        database.update_conversacion_titulo(conv_id, data["titulo"])
+    if data.get("toggle_anclada"):
+        new_state = database.toggle_conversacion_anclada(conv_id)
+        return jsonify({"anclada": new_state})
+    return jsonify({"ok": True})
+
+
+@app.route("/api/conversaciones/<int:conv_id>", methods=["DELETE"])
+def api_eliminar_conversacion(conv_id):
+    database.delete_conversacion(conv_id)
+    return jsonify({"ok": True})
 
 
 # ── Scan API ──────────────────────────────────────────────────────────────────
@@ -372,6 +424,8 @@ def _run_scan(target_path: str):
                 fecha_modificacion=f["fecha_modificacion"],
                 hash_blake2=h,
                 categoria_id=f["categoria_id"],
+                fecha_acceso=f.get("fecha_acceso"),
+                fecha_creacion=f.get("fecha_creacion"),
             )
             database.insert_historial(aid, None, f["ruta_actual"], "indexar")
             if f["extension"] in scanner.DOC_EXTS:
@@ -403,6 +457,8 @@ def _run_scan(target_path: str):
                 fecha_modificacion=f["fecha_modificacion"],
                 hash_blake2=h,
                 categoria_id=f["categoria_id"],
+                fecha_acceso=f.get("fecha_acceso"),
+                fecha_creacion=f.get("fecha_creacion"),
             )
             database.insert_historial(f["db_id"], f["ruta_actual"], f["ruta_actual"], "actualizar")
             database.clear_etiquetas_archivo(f["db_id"])
@@ -647,6 +703,204 @@ def api_ollama_status():
             "missing": status["missing"],
         }
     )
+
+
+@app.route("/api/system/check")
+def api_system_check():
+    """Return system resources + Ollama readiness verdict."""
+    import platform
+    import subprocess
+
+    import psutil
+    from config import ANALYSIS_MODEL, EMBED_MODEL, RESPONSE_MODEL, SQL_MODEL, VISION_MODEL
+
+    # ── RAM ───────────────────────────────────────────────────────────────
+    vm = psutil.virtual_memory()
+    ram_total_gb = round(vm.total / 1024**3, 1)
+    ram_avail_gb = round(vm.available / 1024**3, 1)
+
+    # ── CPU ───────────────────────────────────────────────────────────────
+    cpu_count = psutil.cpu_count(logical=False) or psutil.cpu_count()
+    cpu_freq  = psutil.cpu_freq()
+    cpu_mhz   = round(cpu_freq.max if cpu_freq else 0)
+
+    # ── Disk ──────────────────────────────────────────────────────────────
+    try:
+        disk = psutil.disk_usage(Path(__file__).anchor)
+        disk_free_gb  = round(disk.free  / 1024**3, 1)
+        disk_total_gb = round(disk.total / 1024**3, 1)
+    except Exception:
+        disk_free_gb = disk_total_gb = 0
+
+    # ── GPU detection (NVIDIA → AMD/Intel via wmic) ───────────────────────
+    gpu_name    = None
+    gpu_vram_gb = None
+    gpu_cuda    = False   # True only when CUDA-capable (NVIDIA)
+
+    # 1) NVIDIA via nvidia-smi
+    try:
+        out = subprocess.check_output(
+            ["nvidia-smi", "--query-gpu=name,memory.total",
+             "--format=csv,noheader,nounits"],
+            timeout=5, stderr=subprocess.DEVNULL,
+        ).decode(errors="ignore").strip().splitlines()[0]
+        parts = [p.strip() for p in out.split(",")]
+        gpu_name    = parts[0]
+        gpu_vram_gb = round(int(parts[1]) / 1024, 1)
+        gpu_cuda    = True
+    except Exception:
+        pass
+
+    # 2) Any GPU via wmic (Windows — returns one row per adapter)
+    if not gpu_name and platform.system() == "Windows":
+        try:
+            out = subprocess.check_output(
+                ["wmic", "path", "win32_VideoController",
+                 "get", "Name,AdapterRAM", "/value"],
+                timeout=6, stderr=subprocess.DEVNULL,
+            ).decode(errors="ignore")
+            names, vrams = [], []
+            for line in out.splitlines():
+                line = line.strip()
+                if line.startswith("Name=") and line[5:]:
+                    names.append(line[5:])
+                elif line.startswith("AdapterRAM=") and line[11:].isdigit():
+                    vrams.append(int(line[11:]))
+            if names:
+                gpu_name    = names[0]
+                gpu_vram_gb = round(vrams[0] / 1024**3, 1) if vrams else None
+        except Exception:
+            pass
+
+    # ── Ollama + model status ─────────────────────────────────────────────
+    all_models   = list({ANALYSIS_MODEL, SQL_MODEL, RESPONSE_MODEL, EMBED_MODEL})
+    oll_status   = ollama_client.check_ollama(all_models)
+    installed_set = set(oll_status.get("installed") or [])
+
+    # Model catalog: required vs optional
+    # REQUIRED → missing = ERROR (chat won't work)
+    # OPTIONAL → missing = WARNING (feature degraded, not broken)
+    MODEL_CATALOG = [
+        {"name": ANALYSIS_MODEL, "role": "Análisis de documentos",      "optional": False},
+        {"name": SQL_MODEL,       "role": "Text-to-SQL (chat)",          "optional": False},
+        {"name": RESPONSE_MODEL,  "role": "Respuestas en lenguaje natural","optional": False},
+        {"name": EMBED_MODEL,     "role": "Búsqueda semántica",           "optional": True},
+        {"name": VISION_MODEL,    "role": "Análisis de imágenes",         "optional": True},
+    ]
+    # Deduplicate preserving first occurrence
+    seen_names: set[str] = set()
+    MODEL_CATALOG_DEDUP = []
+    for m in MODEL_CATALOG:
+        if m["name"] not in seen_names:
+            MODEL_CATALOG_DEDUP.append(m)
+            seen_names.add(m["name"])
+
+    MODEL_RAM = {   # approximate GB needed in CPU-only mode
+        "qwen3:8b":         5.5,  "qwen3:14b":   10,  "qwen3:30b":  22,
+        "qwen2.5-coder:7b": 4.8,  "qwen2.5-coder:14b": 10,
+        "nomic-embed-text": 0.4,  "moondream":    2,   "llava":       5,
+    }
+    MODEL_DISK = {
+        "qwen3:8b":         5,    "qwen3:14b":    9,   "qwen3:30b":  18,
+        "qwen2.5-coder:7b": 5,    "qwen2.5-coder:14b": 9,
+        "nomic-embed-text": 0.3,  "moondream":    1.7, "llava":       4,
+    }
+
+    models_info   = []
+    ram_core_need = 0.0   # only required models
+    for m in MODEL_CATALOG_DEDUP:
+        inst = m["name"] in installed_set
+        ram_n = MODEL_RAM.get(m["name"], 4)
+        models_info.append({
+            "name":      m["name"],
+            "role":      m["role"],
+            "optional":  m["optional"],
+            "installed": inst,
+            "ram_gb":    ram_n,
+            "disk_gb":   MODEL_DISK.get(m["name"], 3),
+            "pull_cmd":  f"ollama pull {m['name']}",
+        })
+        if not m["optional"]:
+            ram_core_need += ram_n
+
+    # ── Verdict logic ─────────────────────────────────────────────────────
+    issues   = []   # → ❌  blocks core functionality
+    warnings = []   # → ⚠️  degrades optional features or performance
+
+    if not oll_status["running"]:
+        issues.append("Ollama no está en ejecución — abre una terminal y ejecuta: **ollama serve**")
+
+    missing_required = [m for m in models_info if not m["installed"] and not m["optional"]]
+    if missing_required:
+        for m in missing_required:
+            issues.append(f"Modelo requerido no instalado: **{m['name']}** — `ollama pull {m['name']}`")
+
+    missing_optional = [m for m in models_info if not m["installed"] and m["optional"]]
+    for m in missing_optional:
+        warnings.append(
+            f"Modelo opcional no instalado: **{m['name']}** ({m['role']}) — "
+            f"`ollama pull {m['name']}`"
+        )
+
+    if ram_total_gb < 8:
+        issues.append(f"RAM insuficiente: **{ram_total_gb} GB** (mínimo recomendado: 8 GB)")
+    elif ram_avail_gb < 3:
+        warnings.append(f"Poca RAM disponible: **{ram_avail_gb} GB** libres — cierra otras aplicaciones")
+
+    if gpu_cuda:
+        if gpu_vram_gb is not None and gpu_vram_gb < 4:
+            warnings.append(
+                f"VRAM GPU baja: **{gpu_vram_gb} GB** — algunos modelos no cabrán en GPU "
+                "y usarán CPU como fallback"
+            )
+        # else: GPU CUDA con VRAM suficiente → ningún aviso
+    else:
+        # GPU sin CUDA (AMD/Intel) o sin GPU
+        if gpu_name:
+            warnings.append(
+                f"GPU detectada (**{gpu_name}**) pero sin soporte CUDA — "
+                "Ollama usará CPU para inferencia (más lento, funcional)"
+            )
+        else:
+            warnings.append(
+                "No se detectó GPU — Ollama usará CPU (funciona, pero es más lento)"
+            )
+
+    if disk_free_gb < 5:
+        issues.append(
+            f"Poco espacio en disco: **{disk_free_gb} GB** libres "
+            "(se necesitan ~5 GB para los modelos base)"
+        )
+
+    # Determine verdict
+    if issues:
+        verdict      = "error"
+        verdict_text = "Problemas que impiden el funcionamiento normal"
+    elif warnings:
+        verdict      = "warning"
+        verdict_text = "Ollama puede ejecutarse — hay aspectos mejorables"
+    else:
+        verdict      = "ok"
+        verdict_text = "Todo listo — Ollama tiene recursos suficientes"
+
+    return jsonify({
+        "ram_total_gb":       ram_total_gb,
+        "ram_avail_gb":       ram_avail_gb,
+        "cpu_count":          cpu_count,
+        "cpu_mhz":            cpu_mhz,
+        "disk_free_gb":       disk_free_gb,
+        "disk_total_gb":      disk_total_gb,
+        "gpu_name":           gpu_name,
+        "gpu_vram_gb":        gpu_vram_gb,
+        "gpu_cuda":           gpu_cuda,
+        "ollama_running":     oll_status["running"],
+        "models":             models_info,
+        "ram_core_needed_gb": round(ram_core_need, 1),
+        "issues":             issues,
+        "warnings":           warnings,
+        "verdict":            verdict,
+        "verdict_text":       verdict_text,
+    })
 
 
 # ── Approve / move API ────────────────────────────────────────────────────────

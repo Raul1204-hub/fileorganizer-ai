@@ -11,9 +11,14 @@ from ollama_client import call_ollama, check_ollama, pull_commands
 DB_SCHEMA = """
 Tables:
   categorias(id, nombre, color, icono)
-  archivos(id, nombre, extension, ruta_actual, tamaño_bytes, fecha_modificacion,
-           fecha_indexado, hash_blake2, categoria_id, resumen_ia,
-           texto_via TEXT -- 'pdf'|'ocr'|'vision'|NULL)
+  archivos(id, nombre, extension, ruta_actual, tamaño_bytes,
+           fecha_modificacion TEXT,   -- last write (ISO 8601)
+           fecha_acceso TEXT,         -- last open/read (ISO 8601; may equal mtime if NTFS tracking disabled)
+           fecha_creacion TEXT,       -- file creation time on Windows (ISO 8601)
+           fecha_indexado TEXT,       -- when FileOrganizer indexed it (ISO 8601)
+           hash_blake2, categoria_id, resumen_ia,
+           texto_via TEXT,            -- 'pdf'|'ocr'|'vision'|NULL
+           existe INTEGER DEFAULT 1)
   etiquetas(id, archivo_id, etiqueta)
   historial(id, archivo_id, ruta_origen, ruta_destino, operacion, fecha, revertido)
   recomendaciones(id, archivo_id, tipo, mensaje, fecha, vista, descartada)
@@ -25,6 +30,11 @@ Key joins:
   archivos.categoria_id -> categorias.id
   etiquetas.archivo_id  -> archivos.id
   historial.archivo_id  -> archivos.id
+
+Date query examples:
+  "archivos no abiertos en un año" -> WHERE fecha_acceso < datetime('now','-1 year')
+  "archivos creados este mes"      -> WHERE fecha_creacion >= datetime('now','start of month')
+  "modificado recientemente"       -> WHERE fecha_modificacion >= datetime('now','-7 days')
 """
 
 # Pre-filter: cheap regex check for an early, human-readable rejection.
@@ -175,7 +185,7 @@ def _generate_response(question: str, results: list[dict]) -> str:
     return answer
 
 
-def chat_query(question: str) -> dict:
+def chat_query(question: str, conversacion_id: int | None = None) -> dict:
     # ── Pre-flight: Ollama running + core models present ─────────────────────
     status = check_ollama([SQL_MODEL, RESPONSE_MODEL])
     if not status["running"]:
@@ -216,7 +226,7 @@ def chat_query(question: str) -> dict:
                     f"No encontré archivos indexados con contenido relacionado a «{question}». "
                     "Asegúrate de haber escaneado y analizado los documentos primero."
                 )
-            database.insert_chat_historial(question, "[búsqueda semántica]", respuesta)
+            database.insert_chat_historial(question, "[búsqueda semántica]", respuesta, conversacion_id)
             return {
                 "respuesta": respuesta,
                 "resultados": results,
@@ -248,11 +258,11 @@ def chat_query(question: str) -> dict:
     try:
         resultados = _execute_query(sql)
     except ValueError as e:
-        database.insert_chat_historial(question, sql, str(e))
+        database.insert_chat_historial(question, sql, str(e), conversacion_id)
         return {"respuesta": f"Error al ejecutar la consulta: {e}", "resultados": [], "sql": sql}
 
     respuesta = _generate_response(question, resultados)
-    database.insert_chat_historial(question, sql, respuesta)
+    database.insert_chat_historial(question, sql, respuesta, conversacion_id)
 
     return {
         "respuesta": respuesta,

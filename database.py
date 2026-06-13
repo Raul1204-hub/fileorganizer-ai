@@ -107,12 +107,21 @@ def create_tables():
             descartada INTEGER DEFAULT 0
         );
 
+        CREATE TABLE IF NOT EXISTS conversaciones (
+            id                     INTEGER PRIMARY KEY AUTOINCREMENT,
+            titulo                 TEXT NOT NULL DEFAULT 'Nueva conversación',
+            anclada                INTEGER DEFAULT 0,
+            fecha_creacion         TEXT,
+            fecha_ultima_actividad TEXT
+        );
+
         CREATE TABLE IF NOT EXISTS chat_historial (
-            id           INTEGER PRIMARY KEY AUTOINCREMENT,
-            pregunta     TEXT,
-            sql_generada TEXT,
-            respuesta    TEXT,
-            fecha        TEXT
+            id               INTEGER PRIMARY KEY AUTOINCREMENT,
+            pregunta         TEXT,
+            sql_generada     TEXT,
+            respuesta        TEXT,
+            fecha            TEXT,
+            conversacion_id  INTEGER REFERENCES conversaciones(id)
         );
 
         CREATE TABLE IF NOT EXISTS backup_operaciones (
@@ -187,6 +196,15 @@ def migrate_schema():
         cur.execute("ALTER TABLE archivos ADD COLUMN hash_blake2 TEXT DEFAULT ''")
     if "texto_via" not in existing_cols:
         cur.execute("ALTER TABLE archivos ADD COLUMN texto_via TEXT")
+    if "fecha_acceso" not in existing_cols:
+        cur.execute("ALTER TABLE archivos ADD COLUMN fecha_acceso TEXT")
+    if "fecha_creacion" not in existing_cols:
+        cur.execute("ALTER TABLE archivos ADD COLUMN fecha_creacion TEXT")
+    # chat_historial: add conversacion_id column if missing
+    cur.execute("PRAGMA table_info(chat_historial)")
+    chat_cols = {row["name"] for row in cur.fetchall()}
+    if "conversacion_id" not in chat_cols:
+        cur.execute("ALTER TABLE chat_historial ADD COLUMN conversacion_id INTEGER")
     conn.commit()
     conn.close()
 
@@ -203,14 +221,17 @@ def insert_archivo(
     hash_blake2,
     categoria_id,
     resumen_ia=None,
+    fecha_acceso=None,
+    fecha_creacion=None,
 ):
     conn = get_connection()
     cur = conn.cursor()
     cur.execute(
         """INSERT INTO archivos
            (nombre, extension, ruta_actual, tamaño_bytes, fecha_modificacion,
-            fecha_indexado, hash_blake2, categoria_id, resumen_ia)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            fecha_indexado, hash_blake2, categoria_id, resumen_ia,
+            fecha_acceso, fecha_creacion)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             nombre,
             extension,
@@ -221,6 +242,8 @@ def insert_archivo(
             hash_blake2,
             categoria_id,
             resumen_ia,
+            fecha_acceso,
+            fecha_creacion,
         ),
     )
     archivo_id = cur.lastrowid
@@ -437,7 +460,8 @@ def get_archivos_sin_embedding() -> list[dict]:
 
 
 def update_archivo_full(
-    archivo_id, nombre, extension, ruta_actual, tamaño_bytes, fecha_modificacion, hash_blake2, categoria_id
+    archivo_id, nombre, extension, ruta_actual, tamaño_bytes, fecha_modificacion,
+    hash_blake2, categoria_id, fecha_acceso=None, fecha_creacion=None,
 ):
     """Update metadata for a modified file; preserves resumen_ia and etiquetas rows."""
     conn = get_connection()
@@ -445,7 +469,8 @@ def update_archivo_full(
     cur.execute(
         """UPDATE archivos
            SET nombre=?, extension=?, ruta_actual=?, tamaño_bytes=?,
-               fecha_modificacion=?, hash_blake2=?, categoria_id=?, existe=1
+               fecha_modificacion=?, hash_blake2=?, categoria_id=?, existe=1,
+               fecha_acceso=?, fecha_creacion=?
            WHERE id=?""",
         (
             nombre,
@@ -455,6 +480,8 @@ def update_archivo_full(
             fecha_modificacion,
             hash_blake2,
             categoria_id,
+            fecha_acceso,
+            fecha_creacion,
             archivo_id,
         ),
     )
@@ -657,12 +684,13 @@ def clear_recomendaciones():
 # ── chat_historial ────────────────────────────────────────────────────────────
 
 
-def insert_chat_historial(pregunta, sql_generada, respuesta):
+def insert_chat_historial(pregunta, sql_generada, respuesta, conversacion_id=None):
     conn = get_connection()
     cur = conn.cursor()
     cur.execute(
-        "INSERT INTO chat_historial (pregunta, sql_generada, respuesta, fecha) VALUES (?, ?, ?, ?)",
-        (pregunta, sql_generada, respuesta, datetime.now().isoformat()),
+        "INSERT INTO chat_historial (pregunta, sql_generada, respuesta, fecha, conversacion_id) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (pregunta, sql_generada, respuesta, datetime.now().isoformat(), conversacion_id),
     )
     conn.commit()
     conn.close()
@@ -675,6 +703,98 @@ def get_chat_historial(limit=5):
     rows = cur.fetchall()
     conn.close()
     return [dict(r) for r in rows]
+
+
+# ── conversaciones ────────────────────────────────────────────────────────────
+
+
+def create_conversacion(titulo: str = "Nueva conversación") -> int:
+    conn = get_connection()
+    cur = conn.cursor()
+    now = datetime.now().isoformat()
+    cur.execute(
+        "INSERT INTO conversaciones (titulo, fecha_creacion, fecha_ultima_actividad) VALUES (?, ?, ?)",
+        (titulo, now, now),
+    )
+    conv_id = cur.lastrowid
+    conn.commit()
+    conn.close()
+    return conv_id
+
+
+def get_conversaciones() -> list[dict]:
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT * FROM conversaciones ORDER BY anclada DESC, fecha_ultima_actividad DESC"
+    )
+    rows = cur.fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def get_conversacion(conv_id: int) -> dict | None:
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM conversaciones WHERE id = ?", (conv_id,))
+    row = cur.fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def update_conversacion_titulo(conv_id: int, titulo: str) -> None:
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("UPDATE conversaciones SET titulo = ? WHERE id = ?", (titulo.strip()[:80], conv_id))
+    conn.commit()
+    conn.close()
+
+
+def toggle_conversacion_anclada(conv_id: int) -> bool:
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT anclada FROM conversaciones WHERE id = ?", (conv_id,))
+    row = cur.fetchone()
+    if not row:
+        conn.close()
+        return False
+    new_val = 0 if row["anclada"] else 1
+    cur.execute("UPDATE conversaciones SET anclada = ? WHERE id = ?", (new_val, conv_id))
+    conn.commit()
+    conn.close()
+    return bool(new_val)
+
+
+def delete_conversacion(conv_id: int) -> None:
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("DELETE FROM chat_historial WHERE conversacion_id = ?", (conv_id,))
+    cur.execute("DELETE FROM conversaciones WHERE id = ?", (conv_id,))
+    conn.commit()
+    conn.close()
+
+
+def get_mensajes_conversacion(conv_id: int) -> list[dict]:
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT * FROM chat_historial WHERE conversacion_id = ? ORDER BY fecha ASC",
+        (conv_id,),
+    )
+    rows = cur.fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def update_conversacion_actividad(conv_id: int) -> None:
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        "UPDATE conversaciones SET fecha_ultima_actividad = ? WHERE id = ?",
+        (datetime.now().isoformat(), conv_id),
+    )
+    conn.commit()
+    conn.close()
 
 
 # ── backup_operaciones ────────────────────────────────────────────────────────
