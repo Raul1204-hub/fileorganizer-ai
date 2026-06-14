@@ -696,19 +696,17 @@ function appendHistoryMessage(m) {
   const resultCards = (resultados||[]).slice(0,6).map(r=>`
     <div class="file-card">
       <div class="flex items-start justify-between gap-2 mb-0.5">
-        <a href="/archivo/${r.id||''}" class="block truncate flex-1 font-medium">
-          <i class="fa-solid fa-file mr-1 opacity-60"></i>${esc(r.nombre||'')}
-        </a>
-        <div class="flex gap-0.5 shrink-0">
-          <button onclick="openFile(${r.id})" title="Abrir archivo"
-                  class="p-1 rounded text-gray-400 hover:text-indigo-600 dark:hover:text-indigo-400 transition">
-            <i class="fa-solid fa-up-right-from-square text-[11px]"></i>
-          </button>
-          <button onclick="openLocation(${r.id})" title="Mostrar en explorador"
-                  class="p-1 rounded text-gray-400 hover:text-amber-500 transition">
-            <i class="fa-solid fa-folder-open text-[11px]"></i>
-          </button>
-        </div>
+        ${r.id
+          ? `<a href="/archivo/${r.id}" class="block truncate flex-1 font-medium hover:text-indigo-600 dark:hover:text-indigo-400 transition">
+               <i class="fa-solid fa-file mr-1 opacity-60"></i>${esc(r.nombre||'')}
+             </a>`
+          : `<span class="block truncate flex-1 font-medium"><i class="fa-solid fa-file mr-1 opacity-60"></i>${esc(r.nombre||'')}</span>`
+        }
+        ${r.id ? `
+        <button onclick="openLocation(${r.id})" title="Mostrar en explorador"
+                class="p-1 rounded text-gray-400 hover:text-amber-500 transition shrink-0">
+          <i class="fa-solid fa-folder-open text-[11px]"></i>
+        </button>` : ''}
       </div>
       <div class="text-gray-400 truncate text-[11px]">${esc(r.ruta_actual||'')}</div>
       <div class="flex flex-wrap gap-3 mt-1 text-gray-400 text-[11px]">
@@ -890,19 +888,17 @@ function sendMessage() {
     const resultCards = (d.resultados||[]).slice(0,6).map(r=>`
       <div class="file-card">
         <div class="flex items-start justify-between gap-2 mb-0.5">
-          <a href="/archivo/${r.id||''}" class="block truncate flex-1 font-medium">
-            <i class="fa-solid fa-file mr-1 opacity-60"></i>${esc(r.nombre||'')}
-          </a>
-          <div class="flex gap-0.5 shrink-0">
-            <button onclick="openFile(${r.id})" title="Abrir archivo"
-                    class="p-1 rounded text-gray-400 hover:text-indigo-600 dark:hover:text-indigo-400 transition">
-              <i class="fa-solid fa-up-right-from-square text-[11px]"></i>
-            </button>
-            <button onclick="openLocation(${r.id})" title="Mostrar en explorador"
-                    class="p-1 rounded text-gray-400 hover:text-amber-500 transition">
-              <i class="fa-solid fa-folder-open text-[11px]"></i>
-            </button>
-          </div>
+          ${r.id
+            ? `<a href="/archivo/${r.id}" class="block truncate flex-1 font-medium hover:text-indigo-600 dark:hover:text-indigo-400 transition">
+                 <i class="fa-solid fa-file mr-1 opacity-60"></i>${esc(r.nombre||'')}
+               </a>`
+            : `<span class="block truncate flex-1 font-medium"><i class="fa-solid fa-file mr-1 opacity-60"></i>${esc(r.nombre||'')}</span>`
+          }
+          ${r.id ? `
+          <button onclick="openLocation(${r.id})" title="Mostrar en explorador"
+                  class="p-1 rounded text-gray-400 hover:text-amber-500 transition shrink-0">
+            <i class="fa-solid fa-folder-open text-[11px]"></i>
+          </button>` : ''}
         </div>
         <div class="text-gray-400 truncate text-[11px]">${esc(r.ruta_actual||'')}</div>
         <div class="flex flex-wrap gap-3 mt-1 text-gray-400 text-[11px]">
@@ -1098,10 +1094,6 @@ function installModel(name, btn) {
 }
 
 // ── File reveal helpers ───────────────────────────────────────────────────────
-function openFile(id) {
-  fetch(`/api/open-file/${id}`).then(r=>r.json())
-    .then(d=>{ if(d.error) showToast(d.error, 'error'); });
-}
 function openLocation(id) {
   fetch(`/api/open-location/${id}`).then(r=>r.json())
     .then(d=>{ if(d.error) showToast(d.error, 'error'); });

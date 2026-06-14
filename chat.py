@@ -122,7 +122,9 @@ def generate_sql(question: str) -> str:
 
     prompt = (
         "You are a SQLite expert. Generate ONLY a valid SQLite SELECT query.\n"
-        "No explanation. No markdown. No backticks. No semicolons.\n\n"
+        "No explanation. No markdown. No backticks. No semicolons.\n"
+        "IMPORTANT: When selecting from archivos, always include the `id` column "
+        "(e.g. SELECT a.id, a.nombre, ...) so results can be linked in the UI.\n\n"
         f"Schema:\n{DB_SCHEMA}\n"
         f"Available tags: {tags_str}\n\n"
         f"Recent conversation:\n{history_lines}\n\n"

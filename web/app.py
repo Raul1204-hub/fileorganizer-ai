@@ -1942,13 +1942,12 @@ def api_watch_status():
 
 
 def _search_windows_index(q: str, ext: str, max_results: int = 300) -> tuple[list[dict], str]:
-    """Query Windows Search index via ADODB (fast, instant).
+    """Query Windows Search index via ADODB.
 
+    Tries win32com.client first (no subprocess — near-instant), then falls
+    back to a PowerShell subprocess if pywin32 is not installed.
     Returns (results_list, engine_name).
     """
-    import datetime as _dt
-
-    # Build WHERE clause
     conditions = ["SCOPE='file:'"]
     q_safe = q.replace("'", "''")
     if q:
@@ -1964,6 +1963,36 @@ def _search_windows_index(q: str, ext: str, max_results: int = 300) -> tuple[lis
         f"ORDER BY System.DateModified DESC"
     )
 
+    # ── Fast path: pywin32 — no subprocess overhead ───────────────────────────
+    try:
+        import win32com.client as _com
+        conn = _com.Dispatch("ADODB.Connection")
+        conn.Open("Provider=Search.CollatorDSO;Extended Properties=Application=Windows;")
+        rs = _com.Dispatch("ADODB.Recordset")
+        rs.Open(sql, conn)
+        results: list[dict] = []
+        while not rs.EOF:
+            path_str = rs.Fields["System.ItemPathDisplay"].Value or ""
+            size_val = rs.Fields["System.Size"].Value
+            date_val = rs.Fields["System.DateModified"].Value
+            if path_str:
+                results.append({
+                    "path": path_str,
+                    "name": Path(path_str).name,
+                    "ext": Path(path_str).suffix.lower(),
+                    "size": int(size_val) if size_val else 0,
+                    "date": str(date_val)[:19] if date_val else "",
+                })
+            rs.MoveNext()
+        rs.Close()
+        conn.Close()
+        return results, "Windows Search"
+    except ImportError:
+        pass  # pywin32 not installed → fall through to PowerShell
+    except Exception:
+        return [], "fallback"
+
+    # ── Slow path: PowerShell subprocess ─────────────────────────────────────
     ps_script = f"""
 try {{
     $conn = New-Object -ComObject ADODB.Connection
@@ -1973,12 +2002,9 @@ try {{
     $out = @()
     while (-not $rs.EOF) {{
         $path = $rs.Fields['System.ItemPathDisplay'].Value
-        $name = $rs.Fields['System.FileName'].Value
         $size = $rs.Fields['System.Size'].Value
         $date = $rs.Fields['System.DateModified'].Value
-        if ($path) {{
-            $out += "$path`t$name`t$size`t$date"
-        }}
+        if ($path) {{ $out += "$path`t$size`t$date" }}
         $rs.MoveNext()
     }}
     $rs.Close(); $conn.Close()
@@ -1997,12 +2023,12 @@ try {{
             return [], "fallback"
         results = []
         for line in lines:
-            parts = line.split("\t", 3)
-            if len(parts) < 2:
+            parts = line.split("\t", 2)
+            if not parts[0].strip():
                 continue
             path_str = parts[0].strip()
-            size_str = parts[2].strip() if len(parts) > 2 else "0"
-            date_str = parts[3].strip() if len(parts) > 3 else ""
+            size_str = parts[1].strip() if len(parts) > 1 else "0"
+            date_str = parts[2].strip() if len(parts) > 2 else ""
             try:
                 size = int(size_str) if size_str else 0
             except ValueError:

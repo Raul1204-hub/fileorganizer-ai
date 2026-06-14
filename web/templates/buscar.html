@@ -12,10 +12,16 @@
     border:1px solid var(--border); background:var(--surface-2);
     color:var(--text-2); cursor:pointer; transition:all 0.15s;
   }
-  .ext-chip:hover, .ext-chip.active {
+  .ext-chip:hover {
     background:rgba(99,102,241,0.12);
     border-color:rgba(99,102,241,0.4);
     color:#6366F1;
+  }
+  .ext-chip.active {
+    background:#6366F1;
+    border-color:#4F46E5;
+    color:#fff;
+    box-shadow:0 0 0 3px rgba(99,102,241,0.25);
   }
   .result-row { display:flex; align-items:center; gap:0.75rem;
     padding:0.45rem 1rem; border-bottom:1px solid var(--border-soft);
@@ -103,10 +109,18 @@
     <!-- Table header -->
     <div class="result-row bg-gray-50 dark:bg-gray-800/60 border-b border-gray-100 dark:border-gray-800 !py-2">
       <div class="w-7 flex-shrink-0"></div>
-      <div class="result-name text-[10px] font-bold uppercase tracking-wide text-gray-400">Nombre</div>
-      <div class="result-path text-[10px] font-bold uppercase tracking-wide text-gray-400">Ubicación</div>
-      <div class="result-size text-[10px] font-bold uppercase tracking-wide text-gray-400">Tamaño</div>
-      <div class="result-date text-[10px] font-bold uppercase tracking-wide text-gray-400">Modificado</div>
+      <button class="result-name text-[10px] font-bold uppercase tracking-wide text-gray-400 hover:text-indigo-600 dark:hover:text-indigo-400 text-left transition flex items-center gap-1" onclick="sortBy('name')">
+        Nombre <span id="sort-icon-name" class="opacity-0">↕</span>
+      </button>
+      <button class="result-path text-[10px] font-bold uppercase tracking-wide text-gray-400 hover:text-indigo-600 dark:hover:text-indigo-400 text-left transition flex items-center gap-1" onclick="sortBy('path')">
+        Ubicación <span id="sort-icon-path" class="opacity-0">↕</span>
+      </button>
+      <button class="result-size text-[10px] font-bold uppercase tracking-wide text-gray-400 hover:text-indigo-600 dark:hover:text-indigo-400 text-right transition flex items-center justify-end gap-1" onclick="sortBy('size')">
+        <span id="sort-icon-size" class="opacity-0">↕</span> Tamaño
+      </button>
+      <button class="result-date text-[10px] font-bold uppercase tracking-wide text-gray-400 hover:text-indigo-600 dark:hover:text-indigo-400 text-right transition flex items-center justify-end gap-1" onclick="sortBy('date')">
+        <span id="sort-icon-date" class="opacity-0">↕</span> Modificado
+      </button>
       <div class="result-actions" style="width:3.5rem"></div>
     </div>
     <!-- Rows -->
@@ -130,6 +144,9 @@ let _debounce = null;
 let _activeExt = '';
 let _lastQuery = '';
 let _controller = null;
+let _allResults = [];
+let _sortCol = 'date';
+let _sortAsc = false;
 
 // ── Ext colors ────────────────────────────────────────────────────────────────
 const EXT_CFG = {
@@ -176,6 +193,68 @@ function fmtDate(s) {
 function esc(s){ return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 
 // ── Render ────────────────────────────────────────────────────────────────────
+function _sortedResults() {
+  const arr = [..._allResults];
+  const dir = _sortAsc ? 1 : -1;
+  arr.sort((a, b) => {
+    if (_sortCol === 'name') return dir * a.name.localeCompare(b.name, 'es', {sensitivity:'base'});
+    if (_sortCol === 'path') return dir * a.path.localeCompare(b.path, 'es', {sensitivity:'base'});
+    if (_sortCol === 'size') return dir * ((a.size||0) - (b.size||0));
+    if (_sortCol === 'date') return dir * (a.date||'').localeCompare(b.date||'');
+    return 0;
+  });
+  return arr;
+}
+
+function _updateSortIcons() {
+  ['name','path','size','date'].forEach(col => {
+    const el = document.getElementById(`sort-icon-${col}`);
+    if (!el) return;
+    if (col === _sortCol) {
+      el.textContent = _sortAsc ? '↑' : '↓';
+      el.classList.remove('opacity-0');
+      el.style.color = '#6366F1';
+    } else {
+      el.textContent = '↕';
+      el.classList.add('opacity-0');
+      el.style.color = '';
+    }
+  });
+}
+
+function sortBy(col) {
+  if (_sortCol === col) {
+    _sortAsc = !_sortAsc;
+  } else {
+    _sortCol = col;
+    _sortAsc = col === 'name' || col === 'path';
+  }
+  _updateSortIcons();
+  renderRows();
+}
+
+function renderRows() {
+  const body = document.getElementById('results-body');
+  body.innerHTML = _sortedResults().map(r => {
+    const dir = r.path.replace(/\\/g,'/').split('/').slice(0,-1).join('/');
+    return `
+      <div class="result-row">
+        ${extIcon(r.ext)}
+        <div class="result-name" title="${esc(r.name)}">${esc(r.name)}</div>
+        <div class="result-path" title="${esc(r.path)}">${esc(dir)}</div>
+        <div class="result-size">${fmtSize(r.size)}</div>
+        <div class="result-date">${fmtDate(r.date)}</div>
+        <div class="result-actions">
+          <button onclick="openFolderPath(${JSON.stringify(r.path)})"
+                  title="Mostrar en explorador"
+                  class="p-1.5 rounded text-gray-400 hover:text-amber-500 transition">
+            <i class="fa-solid fa-folder-open text-xs"></i>
+          </button>
+        </div>
+      </div>`;
+  }).join('');
+}
+
 function renderResults(data) {
   const panel  = document.getElementById('results-panel');
   const body   = document.getElementById('results-body');
@@ -186,6 +265,7 @@ function renderResults(data) {
   status.classList.add('hidden');
 
   if (!data || !data.results || !data.results.length) {
+    _allResults = [];
     panel.classList.add('hidden');
     empty.classList.remove('hidden');
     empty.innerHTML = `
@@ -196,34 +276,14 @@ function renderResults(data) {
     return;
   }
 
+  _allResults = data.results;
   document.getElementById('result-count').textContent = data.total;
   document.getElementById('truncated-note').classList.toggle('hidden', !data.truncated);
   document.getElementById('engine-name').textContent = data.engine;
   engine.classList.remove('hidden');
 
-  body.innerHTML = data.results.map(r => {
-    const dir = r.path.replace(/\\/g,'/').split('/').slice(0,-1).join('/');
-    return `
-      <div class="result-row">
-        ${extIcon(r.ext)}
-        <div class="result-name" title="${esc(r.name)}">${esc(r.name)}</div>
-        <div class="result-path" title="${esc(r.path)}">${esc(dir)}</div>
-        <div class="result-size">${fmtSize(r.size)}</div>
-        <div class="result-date">${fmtDate(r.date)}</div>
-        <div class="result-actions">
-          <button onclick="openFilePath(${JSON.stringify(r.path)})"
-                  title="Abrir archivo"
-                  class="p-1.5 rounded text-gray-400 hover:text-indigo-600 dark:hover:text-indigo-400 transition">
-            <i class="fa-solid fa-up-right-from-square text-xs"></i>
-          </button>
-          <button onclick="openFolderPath(${JSON.stringify(r.path)})"
-                  title="Mostrar en explorador"
-                  class="p-1.5 rounded text-gray-400 hover:text-amber-500 transition">
-            <i class="fa-solid fa-folder-open text-xs"></i>
-          </button>
-        </div>
-      </div>`;
-  }).join('');
+  _updateSortIcons();
+  renderRows();
 
   empty.classList.add('hidden');
   panel.classList.remove('hidden');
@@ -298,12 +358,6 @@ function toggleExt(ext) {
 }
 
 // ── File actions (path-based, no DB id needed) ────────────────────────────────
-function openFilePath(path) {
-  fetch('/api/open-path', {
-    method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({path, action:'open'})
-  });
-}
 function openFolderPath(path) {
   fetch('/api/open-path', {
     method:'POST', headers:{'Content-Type':'application/json'},
