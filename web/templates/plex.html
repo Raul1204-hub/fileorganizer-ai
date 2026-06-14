@@ -281,33 +281,80 @@ function _seriesCard(s, si) {
 }
 
 function _renderOpsGroups(ops, si) {
-  const groups = [
-    { label: 'Renombrar vídeos', icon: 'fa-arrows-rotate', color: 'purple',
-      items: ops.filter(o => o.type === 'rename_file' && o.dst) },
-    { label: 'Sin episodio detectado — revisión manual', icon: 'fa-triangle-exclamation', color: 'amber',
-      items: ops.filter(o => o.type === 'rename_file' && !o.dst) },
-    { label: 'Carpetas a limpiar', icon: 'fa-folder-minus', color: 'orange',
-      items: ops.filter(o => o.type === 'delete_folder') },
-    { label: 'Archivos comprimidos / escena', icon: 'fa-file-zipper', color: 'red',
-      items: ops.filter(o => o.type === 'delete_compress') },
-  ];
+  let html = '';
 
-  const colorMap = {
-    purple: 'bg-purple-50 dark:bg-purple-950/30 text-purple-700 dark:text-purple-400',
-    amber:  'bg-amber-50 dark:bg-amber-950/30 text-amber-700 dark:text-amber-400',
-    orange: 'bg-orange-50 dark:bg-orange-950/30 text-orange-700 dark:text-orange-400',
-    red:    'bg-red-50 dark:bg-red-950/30 text-red-700 dark:text-red-400',
-  };
+  // ── Rename ops grouped by Season ─────────────────────────────────────────
+  const renameOps = ops.filter(o => o.type === 'rename_file' && o.dst);
+  if (renameOps.length) {
+    // Group by season number
+    const bySeason = {};
+    renameOps.forEach(o => {
+      const s = o.season ?? -1;
+      if (!bySeason[s]) bySeason[s] = [];
+      bySeason[s].push(o);
+    });
+    Object.keys(bySeason)
+      .map(Number).sort((a, b) => a - b)
+      .forEach(season => {
+        const label = season === 0  ? 'Specials'
+                    : season === -1 ? 'Sin temporada'
+                    : `Season ${String(season).padStart(2, '0')}`;
+        const items = bySeason[season];
+        html += `
+          <div>
+            <div class="px-4 py-1.5 bg-purple-50 dark:bg-purple-950/30 flex items-center gap-1.5">
+              <i class="fa-solid fa-tv text-purple-400 text-[10px]"></i>
+              <span class="text-[10px] font-semibold uppercase tracking-wide text-purple-700 dark:text-purple-400">${label}</span>
+              <span class="ml-auto text-[10px] text-purple-500 opacity-70">${items.length} episodio(s)</span>
+            </div>
+            ${items.map(o => _opRow(o, si, ops.indexOf(o))).join('')}
+          </div>`;
+      });
+  }
 
-  return groups.filter(g => g.items.length).map(g => `
-    <div>
-      <div class="px-4 py-1.5 ${colorMap[g.color]} flex items-center gap-1.5">
-        <i class="fa-solid ${g.icon} text-[10px]"></i>
-        <span class="text-[10px] font-semibold uppercase tracking-wide">${g.label}</span>
-        <span class="ml-auto text-[10px] opacity-70">${g.items.length}</span>
-      </div>
-      ${g.items.map(o => _opRow(o, si, ops.indexOf(o))).join('')}
-    </div>`).join('');
+  // ── Manual review ─────────────────────────────────────────────────────────
+  const manualOps = ops.filter(o => o.type === 'rename_file' && !o.dst);
+  if (manualOps.length) {
+    html += `
+      <div>
+        <div class="px-4 py-1.5 bg-amber-50 dark:bg-amber-950/30 flex items-center gap-1.5">
+          <i class="fa-solid fa-triangle-exclamation text-amber-500 text-[10px]"></i>
+          <span class="text-[10px] font-semibold uppercase tracking-wide text-amber-700 dark:text-amber-400">Sin episodio detectado — revisión manual</span>
+          <span class="ml-auto text-[10px] opacity-70">${manualOps.length}</span>
+        </div>
+        ${manualOps.map(o => _opRow(o, si, ops.indexOf(o))).join('')}
+      </div>`;
+  }
+
+  // ── Folders to clean ──────────────────────────────────────────────────────
+  const folderOps = ops.filter(o => o.type === 'delete_folder');
+  if (folderOps.length) {
+    html += `
+      <div>
+        <div class="px-4 py-1.5 bg-orange-50 dark:bg-orange-950/30 flex items-center gap-1.5">
+          <i class="fa-solid fa-folder-minus text-orange-500 text-[10px]"></i>
+          <span class="text-[10px] font-semibold uppercase tracking-wide text-orange-700 dark:text-orange-400">Carpetas a limpiar</span>
+          <span class="ml-auto text-[10px] opacity-70">${folderOps.length}</span>
+        </div>
+        ${folderOps.map(o => _opRow(o, si, ops.indexOf(o))).join('')}
+      </div>`;
+  }
+
+  // ── Compressed / scene files ──────────────────────────────────────────────
+  const compOps = ops.filter(o => o.type === 'delete_compress');
+  if (compOps.length) {
+    html += `
+      <div>
+        <div class="px-4 py-1.5 bg-red-50 dark:bg-red-950/30 flex items-center gap-1.5">
+          <i class="fa-solid fa-file-zipper text-red-500 text-[10px]"></i>
+          <span class="text-[10px] font-semibold uppercase tracking-wide text-red-700 dark:text-red-400">Archivos comprimidos / escena</span>
+          <span class="ml-auto text-[10px] opacity-70">${compOps.length}</span>
+        </div>
+        ${compOps.map(o => _opRow(o, si, ops.indexOf(o))).join('')}
+      </div>`;
+  }
+
+  return html;
 }
 
 function _toggleSeriesExpand(si) {

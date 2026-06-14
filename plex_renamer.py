@@ -93,17 +93,15 @@ def _season_folder_name(season: int) -> str:
     return "Specials" if season == 0 else f"Season {season:02d}"
 
 
-def _is_series_root(path: Path) -> bool:
-    """Return True if path looks like a single series root (not a library of series)."""
+def _has_plex_season_folders(path: Path) -> bool:
+    """Return True if path has direct Season XX / Specials subfolders."""
     try:
-        for child in path.iterdir():
-            if child.is_dir() and _PLEX_FOLDER_RE.match(child.name):
-                return True
-            if child.is_file() and child.suffix.lower() in VIDEO_EXTS:
-                return True
+        return any(
+            child.is_dir() and _PLEX_FOLDER_RE.match(child.name)
+            for child in path.iterdir()
+        )
     except PermissionError:
-        pass
-    return False
+        return False
 
 
 def scan_for_operations(root: str, show_name: str | None = None) -> list[dict]:
@@ -251,41 +249,48 @@ def scan_for_operations(root: str, show_name: str | None = None) -> list[dict]:
 def scan_library(root: str, show_name: str | None = None) -> list[dict]:
     """
     Scan root as library or single series.
+
+    Library detection: if any direct subdirectory (non-PLEX-named) contains
+    Season XX folders inside it → each such subfolder is a separate series.
+    Root-level PLEX folders (stray Specials/, Season XX/ at library root) do NOT
+    trigger single-series mode if show folders are also present.
     Returns [{series_name, series_path, ops, videos_found}]
     """
     root_path = Path(root).resolve()
 
-    if show_name or _is_series_root(root_path):
-        ops = scan_for_operations(root, show_name)
-        videos_found = sum(
-            1 for f in root_path.rglob("*")
+    def _make_entry(path: Path, name: str | None = None) -> dict:
+        ops = scan_for_operations(str(path), name)
+        videos = sum(
+            1 for f in path.rglob("*")
             if f.is_file() and f.suffix.lower() in VIDEO_EXTS
         )
-        return [{
-            "series_name": show_name or _sanitize_show_name(root_path.name),
-            "series_path": str(root_path),
+        return {
+            "series_name": name or _sanitize_show_name(path.name),
+            "series_path": str(path),
             "ops": ops,
-            "videos_found": videos_found,
-        }]
+            "videos_found": videos,
+        }
 
-    # Library scan: each subfolder = one series
-    results = []
-    for child in sorted(root_path.iterdir()):
-        if not child.is_dir():
-            continue
-        try:
-            child_ops = scan_for_operations(str(child))
-            videos_found = sum(
-                1 for f in child.rglob("*")
-                if f.is_file() and f.suffix.lower() in VIDEO_EXTS
-            )
-            results.append({
-                "series_name": _sanitize_show_name(child.name),
-                "series_path": str(child),
-                "ops": child_ops,
-                "videos_found": videos_found,
-            })
-        except Exception:
-            continue
+    if show_name:
+        return [_make_entry(root_path, show_name)]
 
-    return results
+    # Detect show folders: non-PLEX-named dirs whose children include Season XX
+    series_dirs = [
+        child for child in sorted(root_path.iterdir())
+        if child.is_dir()
+        and not _PLEX_FOLDER_RE.match(child.name)
+        and _has_plex_season_folders(child)
+    ]
+
+    if series_dirs:
+        # Library mode: each show folder is a separate entry
+        results = []
+        for child in series_dirs:
+            try:
+                results.append(_make_entry(child))
+            except Exception:
+                continue
+        return results
+
+    # No show sub-folders detected → treat root itself as a single series
+    return [_make_entry(root_path, show_name)]
