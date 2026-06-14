@@ -2109,7 +2109,7 @@ def api_install_model():
     if not model or not re.match(r'^[\w./:@-]+$', model):
         return jsonify({"error": "Nombre de modelo inválido"}), 400
     try:
-        # Open a PowerShell window that runs ollama pull and stays open
+        import subprocess
         subprocess.Popen(
             ["powershell", "-NoExit", "-Command", f"ollama pull {model}"],
             creationflags=0x00000010,  # CREATE_NEW_CONSOLE
@@ -2138,32 +2138,45 @@ def api_plex_analizar():
     if not Path(root).is_dir():
         return jsonify({"error": f"La carpeta no existe: {root}"}), 400
     try:
-        ops = _pr.scan_for_operations(root, show_name)
-        detected_name = show_name or _pr._sanitize_show_name(Path(root).name)
-        return jsonify({"ops": ops, "total": len(ops), "show_name": detected_name})
+        series = _pr.scan_library(root, show_name)
+        return jsonify({"series": series, "total_series": len(series)})
     except Exception as exc:
         return jsonify({"error": str(exc)}), 500
 
 
-@app.route("/api/plex/aplicar", methods=["POST"])
-def api_plex_aplicar():
-    data = request.get_json() or {}
-    ops = data.get("ops", [])
-    root = (data.get("root") or "").strip()
+# ── PLEX apply: background job + SSE stream ──────────────────────────────────
+
+_plex_jobs: dict[str, dict] = {}
+_plex_job_lock = threading.Lock()
+
+
+def _run_plex_apply(job_id: str, ops: list, root: str) -> None:
+    import shutil as _shutil
+    import uuid as _uuid
+
+    state = _plex_jobs[job_id]
+
+    def _log(level: str, msg: str) -> None:
+        with _plex_job_lock:
+            state["lines"].append({"level": level, "msg": msg})
+        try:
+            database.log_entrada(state["eid"], level, msg)
+        except Exception:
+            pass
 
     timestamp = time.strftime("%Y-%m-%d_%H%M%S")
     backup_dir = Path(__file__).parent.parent / "data" / "backup_plex" / timestamp
-
-    _eid = database.create_ejecucion("plex", f"PLEX rename: {root}")
 
     ok_count = 0
     failed_count = 0
     errores: list[str] = []
 
+    _log("info", f"Iniciando: {len(ops)} operación(es)")
+
     for op in ops:
         if not op.get("approved"):
             continue
-        op_type = op.get("type")
+        op_type = op.get("type", "")
         src_path = Path(op.get("src", ""))
 
         try:
@@ -2173,20 +2186,19 @@ def api_plex_aplicar():
                     continue
                 dst_path = Path(dst_str)
                 if not src_path.exists():
+                    _log("warn", f"No encontrado: {src_path.name}")
                     continue
                 dst_path.parent.mkdir(parents=True, exist_ok=True)
-                # Avoid collision
                 final_dst = dst_path
                 n = 1
-                while final_dst.exists() and final_dst != src_path:
+                while final_dst.exists() and final_dst.resolve() != src_path.resolve():
                     final_dst = dst_path.with_stem(f"{dst_path.stem}_{n}")
                     n += 1
                 src_path.rename(final_dst)
-                database.log_entrada(_eid, "ok",
-                    f"Renombrado: {src_path.name} → {final_dst.name}")
+                _log("ok", f"✓  {op.get('src_folder','')}/{src_path.name}  →  {final_dst.parent.name}/{final_dst.name}")
                 ok_count += 1
 
-            elif op_type in ("delete_compress", "delete_folder"):
+            elif op_type == "delete_compress":
                 if not src_path.exists():
                     continue
                 backup_dir.mkdir(parents=True, exist_ok=True)
@@ -2196,22 +2208,82 @@ def api_plex_aplicar():
                     bak = backup_dir / f"{src_path.stem}_{n}{src_path.suffix}"
                     n += 1
                 src_path.rename(bak)
-                label = "carpeta" if op_type == "delete_folder" else "archivo"
-                database.log_entrada(_eid, "ok",
-                    f"Movido a backup ({label}): {src_path.name}")
+                _log("ok", f"✓ backup (comprimido): {src_path.name}")
+                ok_count += 1
+
+            elif op_type == "delete_folder":
+                if not src_path.exists() or not src_path.is_dir():
+                    continue
+                if op.get("is_empty", False):
+                    src_path.rmdir()
+                    _log("ok", f"✓ eliminada (vacía): {src_path.name}")
+                else:
+                    backup_dir.mkdir(parents=True, exist_ok=True)
+                    bak = backup_dir / src_path.name
+                    n = 1
+                    while bak.exists():
+                        bak = backup_dir / f"{src_path.stem}_{n}"
+                        n += 1
+                    _shutil.move(str(src_path), str(bak))
+                    _log("ok", f"✓ backup (carpeta): {src_path.name}")
                 ok_count += 1
 
         except Exception as exc:
-            msg = f"{op_type} | {src_path.name} | {exc}"
+            msg = f"✗ Error en {src_path.name}: {exc}"
+            _log("error", msg)
             failed_count += 1
-            errores.append(msg)
-            database.log_entrada(_eid, "error", msg)
+            errores.append(str(exc))
 
     estado = "completado" if failed_count == 0 else "error"
-    database.finish_ejecucion(_eid, estado,
+    database.finish_ejecucion(state["eid"], estado,
         json.dumps({"ok": ok_count, "failed": failed_count}))
 
-    return jsonify({"ok": ok_count, "failed": failed_count, "errores": errores[:5]})
+    _log("done", f"{'✓ Completado' if failed_count == 0 else '⚠ Completado con errores'}: {ok_count} ok · {failed_count} errores")
+
+    with _plex_job_lock:
+        state.update({"running": False, "ok": ok_count, "failed": failed_count, "errores": errores})
+
+
+@app.route("/api/plex/aplicar", methods=["POST"])
+def api_plex_aplicar():
+    import uuid as _uuid
+    data = request.get_json() or {}
+    ops  = data.get("ops", [])
+    root = (data.get("root") or "").strip()
+    job_id = _uuid.uuid4().hex[:10]
+    eid = database.create_ejecucion("plex", f"PLEX rename: {root}")
+    with _plex_job_lock:
+        _plex_jobs[job_id] = {
+            "running": True, "lines": [], "eid": eid,
+            "ok": 0, "failed": 0, "errores": [],
+        }
+    threading.Thread(target=_run_plex_apply, args=(job_id, ops, root), daemon=True).start()
+    return jsonify({"job_id": job_id})
+
+
+@app.route("/api/plex/aplicar/stream/<job_id>")
+def api_plex_aplicar_stream(job_id):
+    def _gen():
+        sent = 0
+        while True:
+            state = _plex_jobs.get(job_id)
+            if not state:
+                yield f"data: {json.dumps({'type': 'done', 'ok': 0, 'failed': 0, 'errores': ['Job no encontrado']})}\n\n"
+                break
+            lines = state.get("lines", [])
+            while sent < len(lines):
+                yield f"data: {json.dumps({'type': 'line', **lines[sent]})}\n\n"
+                sent += 1
+            if not state.get("running") and sent >= len(lines):
+                yield f"data: {json.dumps({'type': 'done', 'ok': state['ok'], 'failed': state['failed'], 'errores': state['errores']})}\n\n"
+                break
+            time.sleep(0.2)
+
+    return Response(
+        stream_with_context(_gen()),
+        mimetype="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 # ── Server entry point ────────────────────────────────────────────────────────

@@ -1,19 +1,15 @@
 """
 PLEX library renamer.
 
-Scans a TV-show root folder and proposes renames following PLEX naming conventions:
+Scans a TV-show root (or library root with multiple shows) and proposes renames:
 
-    ShowRoot/
-        Season 01/
-            ShowName - s01e01.mkv
-        Season 02/
-            ShowName - s02e01.mkv
-        Specials/
-            ShowName - s00e01.mkv
+    Season 01/s01e01.mkv
+    Season 02/s02e01.mkv
+    Specials/s00e01.mkv
 
-Usage (from Flask route):
-    ops = plex_renamer.scan_for_operations(root, show_name)
-    # ops is a list of dicts with keys: type, src, dst, season, episode, approved, reason
+Usage:
+    series = plex_renamer.scan_library(root, show_name)
+    # [{series_name, series_path, ops, videos_found}]
 """
 
 import re
@@ -24,7 +20,6 @@ VIDEO_EXTS: frozenset[str] = frozenset({
     ".mpg", ".mpeg", ".flv", ".webm", ".vob", ".ogv", ".3gp", ".rmvb", ".divx",
 })
 
-# Compressed/scene-release files to flag for deletion
 COMPRESS_EXTS: frozenset[str] = frozenset({
     ".rar", ".zip", ".7z", ".tar", ".gz", ".bz2",
     ".r00", ".r01", ".r02", ".r03", ".r04", ".r05",
@@ -33,19 +28,14 @@ COMPRESS_EXTS: frozenset[str] = frozenset({
     ".nfo", ".sfv", ".nzb", ".srr",
 })
 
-# Regex patterns to extract (season, episode) from filename stem
 _SE_PATTERNS: list[re.Pattern] = [
-    re.compile(r'[Ss](\d{1,2})[Ee](\d{1,3})'),                    # S01E01
-    re.compile(r'(\d{1,2})[xX](\d{2})'),                           # 1x01
-    re.compile(r'[Ss]eason[\s._-]*(\d{1,2}).*?[Ee](?:p|pisode)?'  # Season 1 Episode 1
-               r'[\s._-]*(\d{1,3})', re.IGNORECASE),
-    re.compile(r'(?:^|[._\s-])(\d{1,2})(\d{2})(?:[._\s-]|$)'),   # 102 → s01e02 (3-digit)
+    re.compile(r'[Ss](\d{1,2})[Ee](\d{1,3})'),
+    re.compile(r'(\d{1,2})[xX](\d{2})'),
+    re.compile(r'[Ss]eason[\s._-]*(\d{1,2}).*?[Ee](?:p|pisode)?[\s._-]*(\d{1,3})', re.IGNORECASE),
+    re.compile(r'(?:^|[._\s-])(\d{1,2})(\d{2})(?:[._\s-]|$)'),
 ]
-_E_ONLY: re.Pattern = re.compile(
-    r'(?:^|[._\s-])(?:[Ee][Pp]?\.?)(\d{1,3})(?:[._\s-]|$)'
-)
+_E_ONLY: re.Pattern = re.compile(r'(?:^|[._\s-])(?:[Ee][Pp]?\.?)(\d{1,3})(?:[._\s-]|$)')
 
-# Patterns to detect season number from a folder name
 _SEASON_NUM_PATS: list[re.Pattern] = [
     re.compile(r'[Ss]eason[\s._-]*(\d{1,2})', re.IGNORECASE),
     re.compile(r'[Tt]emporada[\s._-]*(\d{1,2})', re.IGNORECASE),
@@ -57,19 +47,21 @@ _SPECIALS_PAT: re.Pattern = re.compile(
     r'specials?|extras?|ova|ona|bonus|oav|ncop|nced|minisode', re.IGNORECASE
 )
 
+# Valid PLEX folder names at series root level
+_PLEX_FOLDER_RE = re.compile(
+    r'^(Season\s+\d+|Specials?|Extras?|OVA|Bonus)$', re.IGNORECASE
+)
+
 
 def _detect_se_from_filename(name: str) -> tuple[int | None, int | None]:
-    """Return (season, episode) or (None, None)."""
     stem = Path(name).stem
     for pat in _SE_PATTERNS:
         m = pat.search(stem)
         if m:
             s, e = int(m.group(1)), int(m.group(2))
-            # Ignore obviously bogus values (year-like 1080, 720, etc.)
             if s > 50 or e > 200:
                 continue
             return s, e
-    # Episode-only pattern — caller provides season from folder context
     m = _E_ONLY.search(stem)
     if m:
         ep = int(m.group(1))
@@ -79,7 +71,6 @@ def _detect_se_from_filename(name: str) -> tuple[int | None, int | None]:
 
 
 def _detect_season_from_folder(folder_name: str) -> int | None:
-    """Return season number (0 = Specials) or None if undetectable."""
     if _SPECIALS_PAT.search(folder_name):
         return 0
     for pat in _SEASON_NUM_PATS:
@@ -92,12 +83,8 @@ def _detect_season_from_folder(folder_name: str) -> int | None:
 
 
 def _sanitize_show_name(name: str) -> str:
-    """Clean root folder name for use as show name in filenames."""
-    # Remove year suffixes like (2020) or [2020]
     name = re.sub(r'\s*[\[\(]\d{4}[\]\)]', '', name)
-    # Remove quality tags like [1080p], [BluRay], etc.
     name = re.sub(r'\s*[\[\(][^\]\)]{1,30}[\]\)]', '', name)
-    # Replace dots/underscores with spaces
     name = re.sub(r'[._]+', ' ', name).strip().rstrip('. ')
     return name or "Show"
 
@@ -106,21 +93,24 @@ def _season_folder_name(season: int) -> str:
     return "Specials" if season == 0 else f"Season {season:02d}"
 
 
-def scan_for_operations(root: str, show_name: str | None = None) -> list[dict]:
-    """Scan root and return proposed operations.
+def _is_series_root(path: Path) -> bool:
+    """Return True if path looks like a single series root (not a library of series)."""
+    try:
+        for child in path.iterdir():
+            if child.is_dir() and _PLEX_FOLDER_RE.match(child.name):
+                return True
+            if child.is_file() and child.suffix.lower() in VIDEO_EXTS:
+                return True
+    except PermissionError:
+        pass
+    return False
 
-    Each dict has:
-        type:     'rename_file' | 'delete_compress'
-        src:      str  — absolute source path
-        dst:      str | None  — absolute destination (None for deletes)
-        season:   int | None
-        episode:  int | None
-        approved: bool  — True by default
-        reason:   str   — human-readable explanation shown in preview
-    """
+
+def scan_for_operations(root: str, show_name: str | None = None) -> list[dict]:
+    """Scan a single series root and return proposed operations."""
     root_path = Path(root).resolve()
     if not root_path.is_dir():
-        raise ValueError(f"La carpeta no existe o no es un directorio: {root}")
+        raise ValueError(f"La carpeta no existe: {root}")
 
     if not show_name:
         show_name = _sanitize_show_name(root_path.name)
@@ -128,6 +118,7 @@ def scan_for_operations(root: str, show_name: str | None = None) -> list[dict]:
     ops: list[dict] = []
     seen_src: set[str] = set()
 
+    # ── Scan video and compressed files ──────────────────────────────────────
     for item in sorted(root_path.rglob("*")):
         if not item.is_file():
             continue
@@ -138,7 +129,6 @@ def scan_for_operations(root: str, show_name: str | None = None) -> list[dict]:
 
         ext = item.suffix.lower()
 
-        # ── Compressed / scene-release files ─────────────────────────────────
         if ext in COMPRESS_EXTS:
             ops.append({
                 "type": "delete_compress",
@@ -146,40 +136,44 @@ def scan_for_operations(root: str, show_name: str | None = None) -> list[dict]:
                 "dst": None,
                 "season": None,
                 "episode": None,
+                "src_folder": item.parent.name,
+                "src_name": item.name,
+                "dst_folder": None,
+                "dst_name": None,
                 "approved": True,
-                "reason": f"Archivo de escena/comprimido ({ext})",
+                "reason": f"Archivo comprimido/escena ({ext})",
             })
             continue
 
-        # ── Only rename video files ───────────────────────────────────────────
         if ext not in VIDEO_EXTS:
             continue
 
-        # Detect season from parent folder when file is not in root
         season_from_folder: int | None = None
         if item.parent != root_path:
             season_from_folder = _detect_season_from_folder(item.parent.name)
 
         season_from_file, episode = _detect_se_from_filename(item.name)
-
         season = season_from_file if season_from_file is not None else season_from_folder
+
         if episode is None:
-            # Can't determine episode — skip (don't guess)
             ops.append({
                 "type": "rename_file",
                 "src": src_str,
                 "dst": None,
                 "season": season,
                 "episode": None,
+                "src_folder": item.parent.name if item.parent != root_path else ".",
+                "src_name": item.name,
+                "dst_folder": None,
+                "dst_name": None,
                 "approved": False,
-                "reason": "No se pudo detectar episodio — requiere revisión manual",
+                "reason": "No se pudo detectar episodio — revisión manual",
             })
             continue
 
         if season is None:
-            season = 1  # Default to Season 01 when no context available
+            season = 1
 
-        # Build target path: root / Season XX / sXXeYY.ext  (no show name prefix)
         ep_tag = f"s{season:02d}e{episode:02d}"
         new_filename = f"{ep_tag}{ext}"
         dst_folder = root_path / _season_folder_name(season)
@@ -194,49 +188,104 @@ def scan_for_operations(root: str, show_name: str | None = None) -> list[dict]:
             "dst": str(dst),
             "season": season,
             "episode": episode,
+            "src_folder": item.parent.name if item.parent != root_path else ".",
+            "src_name": item.name,
+            "dst_folder": _season_folder_name(season),
+            "dst_name": new_filename,
             "approved": True,
             "reason": ep_tag,
         })
 
-    # ── Detect junk folders at root level (not Season XX / Specials) ──────────
-    # These are scene-release folders like "ShowName S01E09 WEB-DL 1080p"
-    # After their video files have been moved, propose deleting the folder itself.
-    _plex_folder_re = re.compile(
-        r'^(Season\s+\d+|Specials?|Extras?|OVA|Bonus)$', re.IGNORECASE
-    )
-    seen_junk_folders: set[str] = set()
-    for item in sorted(root_path.rglob("*")):
-        if not item.is_file():
+    # ── Detect non-PLEX subfolders at series root ─────────────────────────────
+    for child in sorted(root_path.iterdir()):
+        if not child.is_dir():
             continue
-        # Only care about files directly inside non-standard root subdirectories
+        if _PLEX_FOLDER_RE.match(child.name):
+            continue
+
         try:
-            rel_parts = item.relative_to(root_path).parts
-        except ValueError:
+            all_files = [f for f in child.rglob("*") if f.is_file()]
+        except PermissionError:
             continue
-        if len(rel_parts) < 2:
-            continue
-        top_folder = root_path / rel_parts[0]
-        top_name   = rel_parts[0]
-        if _plex_folder_re.match(top_name):
-            continue  # it's a proper Season/Specials folder
-        top_str = str(top_folder)
-        if top_str in seen_junk_folders:
-            continue
-        seen_junk_folders.add(top_str)
+
+        has_videos = any(f.suffix.lower() in VIDEO_EXTS for f in all_files)
+        is_empty = len(all_files) == 0
+        file_count = len(all_files)
+
+        if is_empty:
+            reason = "Carpeta vacía"
+        elif not has_videos:
+            reason = f"Sin vídeos ({file_count} archivo(s): NFO, imágenes…) — se moverá a backup"
+        else:
+            reason = f"Carpeta de lanzamiento escena ({file_count} archivo(s)) — se moverá a backup"
+
         ops.append({
             "type": "delete_folder",
-            "src": top_str,
+            "src": str(child),
             "dst": None,
             "season": None,
             "episode": None,
+            "src_folder": ".",
+            "src_name": child.name,
+            "dst_folder": None,
+            "dst_name": None,
             "approved": True,
-            "reason": f"Carpeta de lanzamiento escena — mover a backup tras extraer episodios",
+            "reason": reason,
+            "is_empty": is_empty,
+            "has_videos": has_videos,
+            "file_count": file_count,
         })
 
-    # Sort: rename_file first, then delete_folder, then delete_compress
+    # Sort: rename_file → delete_folder → delete_compress
     def _sort_key(o: dict) -> tuple:
-        type_order = {"rename_file": 0, "delete_folder": 1, "delete_compress": 2}
-        return (type_order.get(o["type"], 9), o.get("season") or 99, o.get("episode") or 999)
+        return (
+            {"rename_file": 0, "delete_folder": 1, "delete_compress": 2}.get(o["type"], 9),
+            o.get("season") or 99,
+            o.get("episode") or 999,
+        )
 
     ops.sort(key=_sort_key)
     return ops
+
+
+def scan_library(root: str, show_name: str | None = None) -> list[dict]:
+    """
+    Scan root as library or single series.
+    Returns [{series_name, series_path, ops, videos_found}]
+    """
+    root_path = Path(root).resolve()
+
+    if show_name or _is_series_root(root_path):
+        ops = scan_for_operations(root, show_name)
+        videos_found = sum(
+            1 for f in root_path.rglob("*")
+            if f.is_file() and f.suffix.lower() in VIDEO_EXTS
+        )
+        return [{
+            "series_name": show_name or _sanitize_show_name(root_path.name),
+            "series_path": str(root_path),
+            "ops": ops,
+            "videos_found": videos_found,
+        }]
+
+    # Library scan: each subfolder = one series
+    results = []
+    for child in sorted(root_path.iterdir()):
+        if not child.is_dir():
+            continue
+        try:
+            child_ops = scan_for_operations(str(child))
+            videos_found = sum(
+                1 for f in child.rglob("*")
+                if f.is_file() and f.suffix.lower() in VIDEO_EXTS
+            )
+            results.append({
+                "series_name": _sanitize_show_name(child.name),
+                "series_path": str(child),
+                "ops": child_ops,
+                "videos_found": videos_found,
+            })
+        except Exception:
+            continue
+
+    return results

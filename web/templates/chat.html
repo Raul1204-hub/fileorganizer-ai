@@ -1039,16 +1039,9 @@ document.addEventListener('keydown', e => {
       if (m.installed){cls='pill-ok';icon='✅';}
       else if(m.optional){cls='pill-opt';icon='🔵';}
       else{cls='pill-err';icon='❌';}
-      let html = `<span class="model-pill ${cls}" title="${m.optional?m.role+' (opcional)':m.role}">${icon} ${m.name}</span>`;
-      if (!m.installed) {
-        html += `<button class="model-pill" style="cursor:pointer;background:rgba(99,102,241,0.08);border:1px dashed rgba(99,102,241,0.4);color:#6366F1;font-family:monospace;font-size:0.63rem;"
-          title="Copiar al portapapeles" onclick="navigator.clipboard.writeText('${m.pull_cmd}').then(()=>{this.textContent='¡Copiado!';setTimeout(()=>{this.textContent='${m.pull_cmd}'},2000)})">${m.pull_cmd}</button>`;
-        if (m.optional) {
-          html += `<button class="model-pill" style="cursor:pointer;background:rgba(16,185,129,0.10);border:1px solid rgba(16,185,129,0.35);color:#059669;font-size:0.63rem;"
-            title="Abrir terminal e instalar" onclick="installModel('${m.name}', this)">
-            <i class="fa-solid fa-download mr-1"></i>Instalar</button>`;
-        }
-      }
+      // Pills: only show installed models (green) — missing ones appear in warnings below
+      if (!m.installed) return;
+      const html = `<span class="model-pill ${cls}" title="${m.role}">${icon} ${m.name}</span>`;
       modelsEl.insertAdjacentHTML('beforeend', html);
     });
 
