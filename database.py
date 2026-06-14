@@ -5,15 +5,20 @@ from pathlib import Path
 from config import DB_PATH
 
 CATEGORIAS_SEED = [
-    (1, "Documentos", "#4F46E5", "📄"),
-    (2, "Imágenes", "#10B981", "🖼️"),
-    (3, "Audio", "#F59E0B", "🎵"),
-    (4, "Vídeo", "#EF4444", "🎬"),
-    (5, "Código", "#8B5CF6", "💻"),
-    (6, "Datos", "#06B6D4", "🗄️"),
-    (7, "Comprimidos", "#6B7280", "📦"),
-    (8, "Programas", "#F97316", "⚙️"),
-    (9, "Desconocido", "#9CA3AF", "❓"),
+    (1,  "Documentos",  "#4F46E5", "📄"),
+    (2,  "Imágenes",    "#10B981", "🖼️"),
+    (3,  "Audio",       "#F59E0B", "🎵"),
+    (4,  "Vídeo",       "#EF4444", "🎬"),
+    (5,  "Código",      "#8B5CF6", "💻"),
+    (6,  "Datos",       "#06B6D4", "🗄️"),
+    (7,  "Comprimidos", "#6B7280", "📦"),
+    (8,  "Programas",   "#F97316", "⚙️"),
+    (9,  "Desconocido", "#9CA3AF", "❓"),
+    (10, "Libros",      "#7C3AED", "📚"),
+    (11, "Internet",    "#0EA5E9", "🌐"),
+    (12, "Fuentes",     "#EC4899", "🔤"),
+    (13, "Sistema",     "#64748B", "🔧"),
+    (14, "Diseño",      "#F43F5E", "🎨"),
 ]
 
 
@@ -239,6 +244,12 @@ def migrate_schema():
         timestamp TEXT NOT NULL, nivel TEXT NOT NULL, mensaje TEXT NOT NULL)""")
     cur.execute("""CREATE TABLE IF NOT EXISTS config (
         clave TEXT PRIMARY KEY, valor TEXT NOT NULL)""")
+    # Ensure all current categories exist in existing DBs
+    for cat_id, nombre, color, icono in CATEGORIAS_SEED:
+        cur.execute(
+            "INSERT OR IGNORE INTO categorias (id, nombre, color, icono) VALUES (?, ?, ?, ?)",
+            (cat_id, nombre, color, icono),
+        )
     conn.commit()
     conn.close()
 
