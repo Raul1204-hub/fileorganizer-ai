@@ -233,6 +233,8 @@ def migrate_schema():
     chat_cols = {row["name"] for row in cur.fetchall()}
     if "conversacion_id" not in chat_cols:
         cur.execute("ALTER TABLE chat_historial ADD COLUMN conversacion_id INTEGER")
+    if "resultados_json" not in chat_cols:
+        cur.execute("ALTER TABLE chat_historial ADD COLUMN resultados_json TEXT")
     # New tables for execution log feature (idempotent)
     cur.execute("""CREATE TABLE IF NOT EXISTS ejecuciones (
         id INTEGER PRIMARY KEY AUTOINCREMENT, tipo TEXT NOT NULL,
@@ -857,13 +859,15 @@ def clear_recomendaciones():
 # ── chat_historial ────────────────────────────────────────────────────────────
 
 
-def insert_chat_historial(pregunta, sql_generada, respuesta, conversacion_id=None):
+def insert_chat_historial(pregunta, sql_generada, respuesta, conversacion_id=None, resultados=None):
+    import json as _json
     conn = get_connection()
     cur = conn.cursor()
+    resultados_json = _json.dumps(resultados[:6], default=str) if resultados else None
     cur.execute(
-        "INSERT INTO chat_historial (pregunta, sql_generada, respuesta, fecha, conversacion_id) "
-        "VALUES (?, ?, ?, ?, ?)",
-        (pregunta, sql_generada, respuesta, datetime.now().isoformat(), conversacion_id),
+        "INSERT INTO chat_historial (pregunta, sql_generada, respuesta, fecha, conversacion_id, resultados_json) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (pregunta, sql_generada, respuesta, datetime.now().isoformat(), conversacion_id, resultados_json),
     )
     conn.commit()
     conn.close()
@@ -1135,6 +1139,58 @@ def get_grupos_duplicados() -> list[dict]:
 
     grupos.sort(key=lambda g: g["espacio_recuperable"], reverse=True)
     return grupos
+
+
+def get_extension_breakdown(categoria_id: int) -> list[dict]:
+    """Count files per extension within a given category (active files only)."""
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        """SELECT LOWER(COALESCE(extension, '')) AS extension, COUNT(*) AS count
+           FROM archivos
+           WHERE categoria_id = ? AND existe = 1
+           GROUP BY LOWER(COALESCE(extension, ''))
+           ORDER BY count DESC""",
+        (categoria_id,),
+    )
+    rows = [dict(r) for r in cur.fetchall()]
+    conn.close()
+    return rows
+
+
+def recategorize_by_extension(ext_map: dict[str, str], cat_ids: dict[str, int]) -> int:
+    """Re-categorize existing files whose category is 'Desconocido' (id=9) if their
+    extension now maps to a known category.  Also fixes any file whose extension maps
+    to a category that differs from the stored one (handles added/changed mappings).
+
+    Returns the number of rows updated.
+    """
+    unknown_id = cat_ids.get("Desconocido", 9)
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT id, LOWER(COALESCE(extension,'')) AS ext, categoria_id FROM archivos WHERE existe = 1"
+    )
+    rows = cur.fetchall()
+    updated = 0
+    for row in rows:
+        ext = row["ext"]
+        cat_name = ext_map.get(ext)
+        if cat_name is None:
+            continue
+        new_cat_id = cat_ids.get(cat_name)
+        if new_cat_id is None:
+            continue
+        if row["categoria_id"] == new_cat_id:
+            continue
+        # Only fix Desconocido→known OR if the mapping changed since last scan
+        if row["categoria_id"] == unknown_id or row["categoria_id"] != new_cat_id:
+            cur.execute("UPDATE archivos SET categoria_id = ? WHERE id = ?", (new_cat_id, row["id"]))
+            updated += 1
+    if updated:
+        conn.commit()
+    conn.close()
+    return updated
 
 
 def get_archivos_analizados() -> list[dict]:

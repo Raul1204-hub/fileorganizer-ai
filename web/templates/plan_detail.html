@@ -22,6 +22,24 @@
   }
   .dest-input:disabled { cursor: default; }
   .group-section { margin-bottom: 1.25rem; }
+
+  /* ── Visual tree ───────────────────────────────────────── */
+  #tree-panel { font-size: 0.78rem; line-height: 1.7; }
+  .tree-row {
+    display: flex; align-items: center; gap: 0.4rem;
+    padding: 0.18rem 0.4rem; border-radius: 0.35rem; cursor: pointer;
+    transition: background 0.1s;
+  }
+  .tree-row:hover { background: rgba(99,102,241,0.07); }
+  .tree-children { margin-left: 1.2rem; border-left: 1.5px solid rgba(0,0,0,0.07); padding-left: 0.5rem; }
+  .dark .tree-children { border-left-color: rgba(255,255,255,0.09); }
+  .tree-chevron { font-size: 0.58rem; color: #9CA3AF; width: 0.7rem; flex-shrink: 0; transition: transform 0.15s; }
+  .tree-chevron.open { transform: rotate(90deg); }
+  .tree-cb { accent-color: #06B6D4; cursor: pointer; flex-shrink: 0; width: 13px; height: 13px; }
+  .tree-icon { font-size: 0.72rem; flex-shrink: 0; }
+  .tree-label { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text-1); }
+  .tree-count { flex-shrink: 0; font-size: 0.66rem; color: #6B7280; background: rgba(0,0,0,0.06); padding: 0.05rem 0.4rem; border-radius: 9999px; }
+  .dark .tree-count { background: rgba(255,255,255,0.09); color: #9CA3AF; }
 </style>
 {% endblock %}
 
@@ -136,6 +154,27 @@
                  rounded-lg transition">
     <i class="fa-solid fa-xmark mr-1"></i>Omitir todo
   </button>
+  <button id="btn-tree" onclick="toggleTree()"
+          class="px-3 py-2 text-xs font-medium bg-cyan-50 dark:bg-cyan-950
+                 text-cyan-700 dark:text-cyan-300 hover:bg-cyan-100 dark:hover:bg-cyan-900 rounded-lg transition">
+    <i class="fa-solid fa-sitemap mr-1"></i>Esquema visual
+  </button>
+</div>
+
+<!-- ── Visual tree panel ────────────────────────────────────────────────────── -->
+<div id="tree-panel-wrap" class="hidden mb-5">
+  <div class="bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 shadow-sm overflow-hidden">
+    <div class="flex items-center gap-2 px-4 py-3 bg-cyan-50 dark:bg-cyan-950/40
+                border-b border-gray-100 dark:border-gray-800">
+      <i class="fa-solid fa-sitemap text-cyan-600 dark:text-cyan-400 text-sm"></i>
+      <span class="text-sm font-semibold text-gray-700 dark:text-gray-200">Esquema de organización propuesto</span>
+      <span class="text-xs text-gray-400 ml-1">— Selecciona/deselecciona carpetas para aprobar o excluir</span>
+      <button onclick="toggleTree()" class="ml-auto text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 transition">
+        <i class="fa-solid fa-xmark text-sm"></i>
+      </button>
+    </div>
+    <div id="tree-panel" class="p-4 max-h-96 overflow-y-auto"></div>
+  </div>
 </div>
 
 <!-- Datalist for destination autocompletion -->
@@ -471,6 +510,235 @@ async function deshacerPlan() {
     setTimeout(() => librarianSetState('idle'), 3500);
   }
   setTimeout(() => location.reload(), 1500);
+}
+
+// ── Visual tree ───────────────────────────────────────────────────────────────
+// Build a folder path hierarchy from the plan groups.
+// grupos = { "C:\\...\\Documentos\\Contratos": [item, ...], ... }
+const _PLAN_ROOT = {{ plan.carpeta_raiz | tojson }};
+const _PLAN_GROUPS = {
+  {% for folder, gitems in grupos.items() %}
+  {{ folder | tojson }}: [{% for item in gitems %}{{ item.id }},{% endfor %}],
+  {% endfor %}
+};
+
+let _treeBuilt = false;
+
+function toggleTree() {
+  const wrap = document.getElementById('tree-panel-wrap');
+  const hidden = wrap.classList.contains('hidden');
+  wrap.classList.toggle('hidden', !hidden);
+  if (hidden && !_treeBuilt) {
+    buildAndRenderTree();
+    _treeBuilt = true;
+  }
+}
+
+// ── Tree data structure ───────────────────────────────────────────────────────
+// node = { name, fullPath, children: {segName: node}, itemIds: [] }
+function buildTreeData() {
+  const root = { name: '', fullPath: '', children: {}, itemIds: [] };
+
+  const normRoot = _PLAN_ROOT.replace(/\\/g, '/').toLowerCase();
+
+  for (const [fullPath, ids] of Object.entries(_PLAN_GROUPS)) {
+    const norm = fullPath.replace(/\\/g, '/');
+    // Strip the plan root prefix to get relative path
+    let rel = norm;
+    if (norm.toLowerCase().startsWith(normRoot.replace(/\\/g, '/'))) {
+      rel = norm.slice(normRoot.length).replace(/^\//, '');
+    }
+    const parts = rel ? rel.split('/').filter(Boolean) : [fullPath.split(/[\\/]/).pop()];
+
+    let node = root;
+    let pathSoFar = _PLAN_ROOT;
+    for (const part of parts) {
+      pathSoFar = pathSoFar + '\\' + part;
+      if (!node.children[part]) {
+        node.children[part] = { name: part, fullPath: pathSoFar, children: {}, itemIds: [] };
+      }
+      node = node.children[part];
+    }
+    node.itemIds.push(...ids);
+  }
+  return root;
+}
+
+function countDescendantItems(node) {
+  let n = node.itemIds.length;
+  for (const child of Object.values(node.children)) {
+    n += countDescendantItems(child);
+  }
+  return n;
+}
+
+function getAllDescendantIds(node) {
+  const ids = [...node.itemIds];
+  for (const child of Object.values(node.children)) {
+    ids.push(...getAllDescendantIds(child));
+  }
+  return ids;
+}
+
+// ── Rendering ─────────────────────────────────────────────────────────────────
+function renderTree(node, container, depth) {
+  for (const [name, child] of Object.entries(node.children)) {
+    const total = countDescendantItems(child);
+    const hasChildren = Object.keys(child.children).length > 0;
+    const nodeEl = document.createElement('div');
+    nodeEl.className = 'tree-node';
+    nodeEl.dataset.path = child.fullPath;
+
+    const rowEl = document.createElement('div');
+    rowEl.className = 'tree-row';
+
+    // Chevron
+    const chevron = document.createElement('i');
+    chevron.className = 'fa-solid fa-chevron-right tree-chevron' + (hasChildren ? ' open' : '');
+    if (!hasChildren) chevron.style.visibility = 'hidden';
+    rowEl.appendChild(chevron);
+
+    // Checkbox
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.className = 'tree-cb';
+    cb.dataset.path = child.fullPath;
+    cb.checked = true; // start all approved
+    cb.addEventListener('change', () => onTreeCheckChange(child, cb.checked));
+    rowEl.appendChild(cb);
+
+    // Icon + label
+    const icon = document.createElement('i');
+    icon.className = 'fa-solid ' + (hasChildren ? 'fa-folder text-yellow-500' : 'fa-folder text-yellow-400') + ' tree-icon';
+    rowEl.appendChild(icon);
+
+    const label = document.createElement('span');
+    label.className = 'tree-label';
+    label.textContent = name;
+    label.title = child.fullPath;
+    rowEl.appendChild(label);
+
+    // Count badge
+    const badge = document.createElement('span');
+    badge.className = 'tree-count';
+    badge.textContent = total;
+    rowEl.appendChild(badge);
+
+    nodeEl.appendChild(rowEl);
+
+    // Children container
+    if (hasChildren) {
+      const childrenEl = document.createElement('div');
+      childrenEl.className = 'tree-children';
+      renderTree(child, childrenEl, depth + 1);
+      nodeEl.appendChild(childrenEl);
+
+      // Chevron click: collapse/expand children
+      chevron.addEventListener('click', e => {
+        e.stopPropagation();
+        const open = chevron.classList.toggle('open');
+        childrenEl.style.display = open ? '' : 'none';
+      });
+      rowEl.addEventListener('click', e => {
+        if (e.target === cb || e.target === chevron) return;
+        chevron.click();
+      });
+    }
+
+    container.appendChild(nodeEl);
+  }
+}
+
+function buildAndRenderTree() {
+  const panel = document.getElementById('tree-panel');
+  panel.innerHTML = '';
+  const treeData = buildTreeData();
+
+  if (!Object.keys(treeData.children).length) {
+    panel.innerHTML = '<p class="text-xs text-gray-400 text-center py-4">Sin datos para mostrar</p>';
+    return;
+  }
+
+  // Root label showing target folder
+  const rootRow = document.createElement('div');
+  rootRow.className = 'tree-row mb-1';
+  rootRow.innerHTML = `
+    <i class="fa-solid fa-hard-drive tree-icon text-gray-400"></i>
+    <span class="tree-label font-semibold text-gray-600 dark:text-gray-300">${esc(_PLAN_ROOT)}</span>
+    <span class="tree-count">${Object.values(_PLAN_GROUPS).reduce((s,ids)=>s+ids.length,0)}</span>`;
+  panel.appendChild(rootRow);
+
+  const childrenWrap = document.createElement('div');
+  childrenWrap.className = 'tree-children';
+  renderTree(treeData, childrenWrap, 0);
+  panel.appendChild(childrenWrap);
+
+  // Sync initial state from current table checkboxes
+  syncTreeFromTable();
+}
+
+// ── Bidirectional sync ────────────────────────────────────────────────────────
+// tree → table: when a tree checkbox changes, toggle all items under that folder
+function onTreeCheckChange(node, checked) {
+  const ids = getAllDescendantIds(node);
+  ids.forEach(id => {
+    const row = document.getElementById('row-' + id);
+    if (!row || ['aplicado','error'].includes(row.dataset.estado)) return;
+    const cb = row.querySelector('.item-checkbox');
+    if (cb) cb.checked = checked;
+    const estado = checked ? 'aprobado' : 'rechazado';
+    setRowEstado(id, estado);
+  });
+  // Bulk API call
+  const validIds = ids.filter(id => {
+    const row = document.getElementById('row-' + id);
+    return row && !['aplicado','error'].includes(row.dataset.estado);
+  });
+  if (validIds.length) {
+    fetch(`/api/plan/${PLAN_ID}/items/bulk`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({item_ids: validIds, estado: checked ? 'aprobado' : 'rechazado'}),
+    });
+  }
+  refreshStats();
+  // Update parent checkbox states in the tree
+  syncTreeCheckboxStates();
+}
+
+// table → tree: recompute tree checkboxes from current table state
+function syncTreeFromTable() {
+  syncTreeCheckboxStates();
+}
+
+function syncTreeCheckboxStates() {
+  if (!_treeBuilt) return;
+  // For each tree checkbox, check if all its items are approved
+  document.querySelectorAll('.tree-cb').forEach(cb => {
+    const path = cb.dataset.path;
+    // Find all item IDs under this path
+    const ids = [];
+    for (const [fp, fids] of Object.entries(_PLAN_GROUPS)) {
+      if (fp === path || fp.startsWith(path + '\\') || fp.startsWith(path + '/')) {
+        ids.push(...fids);
+      }
+    }
+    if (!ids.length) return;
+    const activeRows = ids.map(id => document.getElementById('row-' + id)).filter(Boolean)
+      .filter(r => !['aplicado','error'].includes(r.dataset.estado));
+    if (!activeRows.length) { cb.indeterminate = false; cb.checked = true; return; }
+    const nApproved = activeRows.filter(r => r.dataset.estado === 'aprobado').length;
+    if (nApproved === activeRows.length) { cb.checked = true; cb.indeterminate = false; }
+    else if (nApproved === 0) { cb.checked = false; cb.indeterminate = false; }
+    else { cb.checked = false; cb.indeterminate = true; }
+  });
+}
+
+// Patch toggleItem to also sync tree
+const _origToggleItem = toggleItem;
+function toggleItem(itemId, checked) {
+  _origToggleItem(itemId, checked);
+  syncTreeCheckboxStates();
 }
 
 // ── Init ──────────────────────────────────────────────────────────────────────

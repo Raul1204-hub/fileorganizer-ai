@@ -1,0 +1,435 @@
+{% extends "base.html" %}
+{% block title %}PLEX Renamer — FileOrganizer AI{% endblock %}
+{% block page_title %}PLEX Renamer{% endblock %}
+
+{% block content %}
+<div class="max-w-5xl mx-auto space-y-5">
+
+  <!-- Header card -->
+  <div class="bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 p-6">
+    <div class="flex items-start gap-4">
+      <div class="w-11 h-11 rounded-xl bg-purple-100 dark:bg-purple-950 flex items-center justify-center shrink-0">
+        <i class="fa-solid fa-tv text-purple-600 dark:text-purple-400 text-lg"></i>
+      </div>
+      <div class="flex-1">
+        <h2 class="text-base font-semibold text-gray-900 dark:text-white mb-1">
+          Renombrar para biblioteca PLEX
+        </h2>
+        <p class="text-sm text-gray-500 dark:text-gray-400 leading-relaxed">
+          Selecciona la carpeta raíz de una serie. El asistente detecta temporadas y episodios
+          y propone renombrarlos a formato PLEX:
+          <code class="text-xs bg-gray-100 dark:bg-gray-800 px-1.5 py-0.5 rounded">Season 01/ShowName - s01e01.mkv</code>
+          Los archivos comprimidos y de escena se mueven a una carpeta de backup.
+        </p>
+      </div>
+    </div>
+
+    <!-- Input form -->
+    <div class="mt-5 grid grid-cols-1 gap-3 sm:grid-cols-[1fr_220px_auto]">
+      <div>
+        <label class="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1.5">
+          Carpeta raíz de la serie
+        </label>
+        <div class="flex gap-2">
+          <input id="plex-root" type="text" placeholder="C:\Series\Breaking Bad"
+                 class="flex-1 px-3 py-2 text-sm bg-gray-50 dark:bg-gray-800 border border-gray-200
+                        dark:border-gray-700 rounded-lg focus:outline-none focus:border-purple-400
+                        dark:focus:border-purple-500 text-gray-900 dark:text-gray-100">
+          <button onclick="browseRoot()"
+                  class="px-3 py-2 bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700
+                         text-gray-600 dark:text-gray-300 rounded-lg text-sm transition"
+                  title="Explorar carpeta">
+            <i class="fa-solid fa-folder-open"></i>
+          </button>
+        </div>
+      </div>
+      <div>
+        <label class="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1.5">
+          Nombre del show <span class="font-normal text-gray-400">(auto-detectado)</span>
+        </label>
+        <input id="plex-showname" type="text" placeholder="Breaking Bad"
+               class="w-full px-3 py-2 text-sm bg-gray-50 dark:bg-gray-800 border border-gray-200
+                      dark:border-gray-700 rounded-lg focus:outline-none focus:border-purple-400
+                      dark:focus:border-purple-500 text-gray-900 dark:text-gray-100">
+      </div>
+      <div class="flex items-end">
+        <button id="btn-analizar" onclick="analizarPlex()"
+                class="w-full px-5 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-lg text-sm
+                       font-medium transition flex items-center justify-center gap-2">
+          <i class="fa-solid fa-magnifying-glass"></i> Analizar
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Results panel (hidden until analysis) -->
+  <div id="plex-results" class="hidden space-y-4">
+
+    <!-- Stats bar -->
+    <div class="bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 px-5 py-3
+                flex flex-wrap items-center gap-4">
+      <span class="text-sm font-semibold text-gray-700 dark:text-gray-300">
+        Resultado del análisis
+        <span id="res-show" class="text-purple-600 dark:text-purple-400"></span>
+      </span>
+      <div class="flex flex-wrap gap-3 ml-auto text-xs text-gray-500 dark:text-gray-400">
+        <span><span id="cnt-rename" class="font-bold text-gray-800 dark:text-gray-200">0</span> renombrar</span>
+        <span><span id="cnt-manual" class="font-bold text-amber-600 dark:text-amber-400">0</span> sin detectar</span>
+        <span><span id="cnt-folder" class="font-bold text-orange-600 dark:text-orange-400">0</span> carpetas junk</span>
+        <span><span id="cnt-delete" class="font-bold text-red-600 dark:text-red-400">0</span> comprimidos</span>
+      </div>
+      <div class="flex items-center gap-2 ml-4">
+        <button onclick="toggleAll(true)"
+                class="px-2.5 py-1 text-xs bg-emerald-50 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300
+                       border border-emerald-200 dark:border-emerald-800 rounded-lg hover:bg-emerald-100 transition">
+          Seleccionar todo
+        </button>
+        <button onclick="toggleAll(false)"
+                class="px-2.5 py-1 text-xs bg-gray-50 dark:bg-gray-800 text-gray-600 dark:text-gray-400
+                       border border-gray-200 dark:border-gray-700 rounded-lg hover:bg-gray-100 transition">
+          Deseleccionar
+        </button>
+        <button id="btn-aplicar" onclick="aplicarPlex()"
+                class="px-4 py-1.5 text-xs bg-purple-600 hover:bg-purple-700 text-white rounded-lg
+                       font-medium transition flex items-center gap-1.5">
+          <i class="fa-solid fa-play"></i> Aplicar seleccionados
+        </button>
+      </div>
+    </div>
+
+    <!-- Operations table grouped by type -->
+    <div class="bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 overflow-hidden">
+      <div id="ops-rename-section" class="hidden">
+        <div class="px-5 py-2.5 bg-purple-50 dark:bg-purple-950/40 border-b border-purple-100 dark:border-purple-900
+                    flex items-center gap-2">
+          <i class="fa-solid fa-arrows-rotate text-purple-500 text-xs"></i>
+          <span class="text-xs font-semibold text-purple-700 dark:text-purple-300 uppercase tracking-wide">
+            Renombrar archivos de vídeo
+          </span>
+          <span id="cnt-rename-badge" class="ml-auto badge bg-purple-100 dark:bg-purple-900 text-purple-700 dark:text-purple-300 text-[10px]"></span>
+        </div>
+        <div id="ops-rename-body" class="divide-y divide-gray-50 dark:divide-gray-800/60"></div>
+      </div>
+
+      <div id="ops-manual-section" class="hidden">
+        <div class="px-5 py-2.5 bg-amber-50 dark:bg-amber-950/30 border-b border-amber-100 dark:border-amber-900
+                    flex items-center gap-2">
+          <i class="fa-solid fa-triangle-exclamation text-amber-500 text-xs"></i>
+          <span class="text-xs font-semibold text-amber-700 dark:text-amber-400 uppercase tracking-wide">
+            Sin episodio detectado — revisión manual
+          </span>
+          <span id="cnt-manual-badge" class="ml-auto badge bg-amber-100 dark:bg-amber-900 text-amber-700 dark:text-amber-400 text-[10px]"></span>
+        </div>
+        <div id="ops-manual-body" class="divide-y divide-gray-50 dark:divide-gray-800/60"></div>
+      </div>
+
+      <div id="ops-folder-section" class="hidden">
+        <div class="px-5 py-2.5 bg-orange-50 dark:bg-orange-950/30 border-b border-orange-100 dark:border-orange-900
+                    flex items-center gap-2">
+          <i class="fa-solid fa-folder-minus text-orange-500 text-xs"></i>
+          <span class="text-xs font-semibold text-orange-700 dark:text-orange-400 uppercase tracking-wide">
+            Carpetas junk (lanzamientos escena) — mover a backup
+          </span>
+          <span id="cnt-folder-badge" class="ml-auto badge bg-orange-100 dark:bg-orange-900 text-orange-700 dark:text-orange-400 text-[10px]"></span>
+        </div>
+        <div id="ops-folder-body" class="divide-y divide-gray-50 dark:divide-gray-800/60"></div>
+      </div>
+
+      <div id="ops-delete-section" class="hidden">
+        <div class="px-5 py-2.5 bg-red-50 dark:bg-red-950/30 border-b border-red-100 dark:border-red-900
+                    flex items-center gap-2">
+          <i class="fa-solid fa-trash text-red-500 text-xs"></i>
+          <span class="text-xs font-semibold text-red-700 dark:text-red-400 uppercase tracking-wide">
+            Mover a backup (comprimidos / archivos de escena)
+          </span>
+          <span id="cnt-delete-badge" class="ml-auto badge bg-red-100 dark:bg-red-900 text-red-700 dark:text-red-400 text-[10px]"></span>
+        </div>
+        <div id="ops-delete-body" class="divide-y divide-gray-50 dark:divide-gray-800/60"></div>
+      </div>
+    </div>
+
+    <!-- Apply log (appears after applying) -->
+    <div id="apply-log" class="hidden bg-white dark:bg-gray-900 rounded-xl border border-gray-200
+                                dark:border-gray-800 overflow-hidden">
+      <div class="px-5 py-2.5 border-b border-gray-100 dark:border-gray-800 flex items-center gap-2">
+        <i id="apply-log-icon" class="fa-solid fa-spinner fa-spin text-purple-500 text-xs"></i>
+        <span id="apply-log-status" class="text-xs font-semibold text-gray-700 dark:text-gray-300">Aplicando…</span>
+      </div>
+      <div id="apply-log-body" class="px-5 py-3 font-mono text-[11px] space-y-0.5 max-h-48 overflow-y-auto"></div>
+    </div>
+
+  </div><!-- /plex-results -->
+
+  <!-- Empty state -->
+  <div id="plex-empty" class="text-center py-16 text-gray-400">
+    <i class="fa-solid fa-tv text-4xl mb-4 block opacity-20"></i>
+    <p class="text-sm">Introduce una carpeta de serie y pulsa <strong>Analizar</strong>.</p>
+    <p class="text-xs mt-1 opacity-70">La vista previa aparecerá aquí antes de aplicar nada.</p>
+  </div>
+
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// ── State ─────────────────────────────────────────────────────────────────────
+let _ops = [];
+let _root = '';
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+function esc(s) {
+  return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+async function browseRoot() {
+  const r = await fetch('/api/browse-folder');
+  const d = await r.json();
+  if (d.path) {
+    document.getElementById('plex-root').value = d.path;
+    // Auto-fill show name from folder name
+    const parts = d.path.replace(/\\/g, '/').split('/');
+    const folderName = parts[parts.length - 1] || '';
+    if (folderName && !document.getElementById('plex-showname').value) {
+      document.getElementById('plex-showname').value = folderName;
+    }
+  }
+}
+
+function _opRow(op, idx) {
+  const isDelete  = op.type === 'delete_compress';
+  const isFolder  = op.type === 'delete_folder';
+  const isManual  = op.type === 'rename_file' && !op.dst;
+  const srcName   = op.src.replace(/\\/g, '/').split('/').pop();
+  const dstName   = op.dst ? op.dst.replace(/\\/g, '/').split('/').pop() : null;
+  const dstFolder = op.dst ? (() => {
+    const parts = op.dst.replace(/\\/g, '/').split('/');
+    return parts[parts.length - 2] || '';
+  })() : null;
+
+  const checkDisabled = isManual ? 'disabled' : '';
+  const checkChecked  = op.approved && !isManual ? 'checked' : '';
+  const rowOpacity    = isManual ? 'opacity-50' : '';
+
+  let icon, subtitle;
+  if (isFolder) {
+    icon = `<i class="fa-solid fa-folder-minus text-orange-400 shrink-0"></i><span class="truncate">${esc(srcName)}</span>`;
+    subtitle = `<div class="text-[11px] text-orange-500 dark:text-orange-400 mt-0.5">${esc(op.reason)}</div>`;
+  } else if (isDelete) {
+    icon = `<i class="fa-solid fa-file-zipper text-red-400 shrink-0"></i><span class="truncate">${esc(srcName)}</span>`;
+    subtitle = `<div class="text-[11px] text-gray-400 mt-0.5">${esc(op.reason)}</div>`;
+  } else if (isManual) {
+    icon = `<i class="fa-solid fa-video text-amber-400 shrink-0"></i><span class="truncate">${esc(srcName)}</span>`;
+    subtitle = `<div class="text-[11px] text-amber-500 mt-0.5">${esc(op.reason)}</div>`;
+  } else {
+    icon = `<i class="fa-solid fa-video text-purple-400 shrink-0"></i><span class="truncate">${esc(srcName)}</span>`;
+    subtitle = dstName ? `
+      <div class="flex items-center gap-1.5 mt-0.5">
+        <i class="fa-solid fa-arrow-right text-gray-300 dark:text-gray-600 text-[10px]"></i>
+        <span class="text-[11px] text-purple-600 dark:text-purple-400 font-mono font-medium">${esc(dstFolder)}/</span>
+        <span class="text-[11px] text-gray-500 dark:text-gray-400 truncate">${esc(dstName)}</span>
+      </div>` : '';
+  }
+
+  const badge = (!isDelete && !isFolder && !isManual && op.season != null) ? `
+    <span class="shrink-0 badge bg-purple-50 dark:bg-purple-950 text-purple-700 dark:text-purple-300 text-[10px]">
+      ${esc(op.reason)}
+    </span>` : '';
+
+  return `
+    <div class="flex items-center gap-3 px-5 py-2.5 hover:bg-gray-50 dark:hover:bg-gray-800/30 ${rowOpacity}" data-idx="${idx}">
+      <input type="checkbox" ${checkChecked} ${checkDisabled}
+             onchange="_ops[${idx}].approved = this.checked"
+             class="w-3.5 h-3.5 rounded accent-purple-600 shrink-0 cursor-pointer">
+      <div class="flex-1 min-w-0">
+        <div class="flex items-center gap-2 text-xs text-gray-800 dark:text-gray-200 font-medium truncate">
+          ${icon}
+        </div>
+        ${subtitle}
+      </div>
+      ${badge}
+    </div>`;
+}
+
+function renderOps() {
+  const renameOps = _ops.filter(o => o.type === 'rename_file' && o.dst);
+  const manualOps = _ops.filter(o => o.type === 'rename_file' && !o.dst);
+  const folderOps = _ops.filter(o => o.type === 'delete_folder');
+  const deleteOps = _ops.filter(o => o.type === 'delete_compress');
+
+  document.getElementById('cnt-rename').textContent = renameOps.length;
+  document.getElementById('cnt-manual').textContent = manualOps.length;
+  document.getElementById('cnt-folder').textContent = folderOps.length;
+  document.getElementById('cnt-delete').textContent = deleteOps.length;
+  document.getElementById('cnt-rename-badge').textContent = renameOps.length;
+  document.getElementById('cnt-manual-badge').textContent = manualOps.length;
+  document.getElementById('cnt-folder-badge').textContent = folderOps.length;
+  document.getElementById('cnt-delete-badge').textContent = deleteOps.length;
+
+  const renameSection = document.getElementById('ops-rename-section');
+  const manualSection = document.getElementById('ops-manual-section');
+  const folderSection = document.getElementById('ops-folder-section');
+  const deleteSection = document.getElementById('ops-delete-section');
+
+  if (renameOps.length) {
+    renameSection.classList.remove('hidden');
+    document.getElementById('ops-rename-body').innerHTML =
+      renameOps.map(o => _opRow(o, _ops.indexOf(o))).join('');
+  } else renameSection.classList.add('hidden');
+
+  if (manualOps.length) {
+    manualSection.classList.remove('hidden');
+    document.getElementById('ops-manual-body').innerHTML =
+      manualOps.map(o => _opRow(o, _ops.indexOf(o))).join('');
+  } else manualSection.classList.add('hidden');
+
+  if (folderOps.length) {
+    folderSection.classList.remove('hidden');
+    document.getElementById('ops-folder-body').innerHTML =
+      folderOps.map(o => _opRow(o, _ops.indexOf(o))).join('');
+  } else folderSection.classList.add('hidden');
+
+  if (deleteOps.length) {
+    deleteSection.classList.remove('hidden');
+    document.getElementById('ops-delete-body').innerHTML =
+      deleteOps.map(o => _opRow(o, _ops.indexOf(o))).join('');
+  } else deleteSection.classList.add('hidden');
+}
+
+function toggleAll(checked) {
+  _ops.forEach((o) => {
+    if (o.type === 'rename_file' && o.dst) o.approved = checked;
+    if (o.type === 'delete_folder') o.approved = checked;
+    if (o.type === 'delete_compress') o.approved = checked;
+  });
+  document.querySelectorAll('#plex-results input[type=checkbox]:not(:disabled)')
+    .forEach(cb => cb.checked = checked);
+}
+
+// ── Analyze ───────────────────────────────────────────────────────────────────
+async function analizarPlex() {
+  const root = document.getElementById('plex-root').value.trim();
+  const showName = document.getElementById('plex-showname').value.trim();
+  if (!root) { showToast('Introduce una carpeta de serie', 'warning'); return; }
+
+  const btn = document.getElementById('btn-analizar');
+  btn.disabled = true;
+  btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Analizando…';
+  document.getElementById('plex-empty').classList.add('hidden');
+  document.getElementById('plex-results').classList.add('hidden');
+  document.getElementById('apply-log').classList.add('hidden');
+
+  try {
+    const r = await fetch('/api/plex/analizar', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ root, show_name: showName || null }),
+    });
+    const d = await r.json();
+    if (!r.ok) { showToast(d.error || 'Error al analizar', 'error'); return; }
+
+    _ops  = d.ops;
+    _root = root;
+
+    if (!_ops.length) {
+      showToast('No se encontraron archivos de vídeo en esta carpeta.', 'info');
+      document.getElementById('plex-empty').classList.remove('hidden');
+      return;
+    }
+
+    document.getElementById('res-show').textContent = ' · ' + (d.show_name || '');
+    renderOps();
+    document.getElementById('plex-results').classList.remove('hidden');
+
+  } catch (e) {
+    showToast('Error de red: ' + e.message, 'error');
+    document.getElementById('plex-empty').classList.remove('hidden');
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = '<i class="fa-solid fa-magnifying-glass"></i> Analizar';
+  }
+}
+
+// ── Apply ─────────────────────────────────────────────────────────────────────
+async function aplicarPlex() {
+  const approved = _ops.filter(o => o.approved);
+  if (!approved.length) {
+    showToast('Selecciona al menos una operación', 'warning');
+    return;
+  }
+
+  const renameCount = approved.filter(o => o.type === 'rename_file').length;
+  const folderCount = approved.filter(o => o.type === 'delete_folder').length;
+  const deleteCount = approved.filter(o => o.type === 'delete_compress').length;
+  let confirmMsg = `¿Aplicar ${renameCount} renombrado(s)`;
+  if (folderCount) confirmMsg += `, mover ${folderCount} carpeta(s) junk a backup`;
+  if (deleteCount) confirmMsg += `, mover ${deleteCount} archivo(s) comprimidos a backup`;
+  confirmMsg += `?\n\nTodo se mueve a data/backup_plex/ (no se elimina permanentemente).`;
+  if (!confirm(confirmMsg)) return;
+
+  const logPanel = document.getElementById('apply-log');
+  const logBody  = document.getElementById('apply-log-body');
+  const logIcon  = document.getElementById('apply-log-icon');
+  const logStatus = document.getElementById('apply-log-status');
+
+  logPanel.classList.remove('hidden');
+  logBody.innerHTML = '';
+  logIcon.className = 'fa-solid fa-spinner fa-spin text-purple-500 text-xs';
+  logStatus.textContent = `Aplicando ${approved.length} operación(es)…`;
+
+  const btn = document.getElementById('btn-aplicar');
+  btn.disabled = true;
+  btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Aplicando…';
+
+  function addLog(msg, cls='text-gray-500 dark:text-gray-400') {
+    const div = document.createElement('div');
+    div.className = cls;
+    div.textContent = msg;
+    logBody.appendChild(div);
+    logBody.scrollTop = logBody.scrollHeight;
+  }
+
+  try {
+    const r = await fetch('/api/plex/aplicar', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ root: _root, ops: approved }),
+    });
+    const d = await r.json();
+
+    if (d.ok > 0) addLog(`✓ ${d.ok} operación(es) completada(s)`, 'text-emerald-600 dark:text-emerald-400');
+    if (d.failed > 0) addLog(`✗ ${d.failed} error(es)`, 'text-red-500');
+    (d.errores || []).forEach(e => addLog('  ' + e, 'text-red-400 text-[10px]'));
+
+    if (d.failed === 0) {
+      logIcon.className = 'fa-solid fa-circle-check text-emerald-500 text-xs';
+      logStatus.textContent = `Completado — ${d.ok} operaciones aplicadas`;
+      showToast(`${d.ok} operaciones completadas con éxito`, 'success');
+    } else {
+      logIcon.className = 'fa-solid fa-triangle-exclamation text-amber-500 text-xs';
+      logStatus.textContent = `Completado con errores — ${d.ok} ok · ${d.failed} fallidos`;
+      showToast(`${d.ok} ok · ${d.failed} errores`, 'warning');
+    }
+
+    // Re-analyze to refresh the preview
+    setTimeout(() => analizarPlex(), 1000);
+
+  } catch(e) {
+    logIcon.className = 'fa-solid fa-circle-xmark text-red-500 text-xs';
+    logStatus.textContent = 'Error de red';
+    addLog('Error: ' + e.message, 'text-red-500');
+    showToast('Error de red: ' + e.message, 'error');
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = '<i class="fa-solid fa-play"></i> Aplicar seleccionados';
+  }
+}
+
+// Enter key on inputs triggers analyze
+document.getElementById('plex-root').addEventListener('keydown', e => {
+  if (e.key === 'Enter') analizarPlex();
+});
+document.getElementById('plex-showname').addEventListener('keydown', e => {
+  if (e.key === 'Enter') analizarPlex();
+});
+</script>
+{% endblock %}

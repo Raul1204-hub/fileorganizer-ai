@@ -226,7 +226,7 @@ def chat_query(question: str, conversacion_id: int | None = None) -> dict:
                     f"No encontré archivos indexados con contenido relacionado a «{question}». "
                     "Asegúrate de haber escaneado y analizado los documentos primero."
                 )
-            database.insert_chat_historial(question, "[búsqueda semántica]", respuesta, conversacion_id)
+            database.insert_chat_historial(question, "[búsqueda semántica]", respuesta, conversacion_id, results)
             return {
                 "respuesta": respuesta,
                 "resultados": results,
@@ -258,11 +258,11 @@ def chat_query(question: str, conversacion_id: int | None = None) -> dict:
     try:
         resultados = _execute_query(sql)
     except ValueError as e:
-        database.insert_chat_historial(question, sql, str(e), conversacion_id)
+        database.insert_chat_historial(question, sql, str(e), conversacion_id, [])
         return {"respuesta": f"Error al ejecutar la consulta: {e}", "resultados": [], "sql": sql}
 
     respuesta = _generate_response(question, resultados)
-    database.insert_chat_historial(question, sql, respuesta, conversacion_id)
+    database.insert_chat_historial(question, sql, respuesta, conversacion_id, resultados)
 
     return {
         "respuesta": respuesta,

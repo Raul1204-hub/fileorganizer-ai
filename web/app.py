@@ -1,5 +1,6 @@
 import atexit
 import json
+import re
 import sys
 import threading
 import time
@@ -181,6 +182,8 @@ def explorar():
     archivos = all_files[offset : offset + per_page]
     categorias = database.get_categorias()
 
+    ext_breakdown = database.get_extension_breakdown(categoria_id) if categoria_id else []
+
     return render_template(
         "explorar.html",
         archivos=archivos,
@@ -191,6 +194,7 @@ def explorar():
         search=search or "",
         categoria_id=categoria_id,
         sort=sort,
+        ext_breakdown=ext_breakdown,
     )
 
 
@@ -470,7 +474,14 @@ def _run_scan(target_path: str):
         modified: list[dict] = []
         disappeared_ids: list[int] = []
 
-        for f in disk_files:
+        _total_disk = len(disk_files)
+        with _lock:
+            _ss.total = _total_disk
+            _ss.hechos = 0
+            _ss.t_inicio_fase = time.monotonic()
+
+        _t_last_recon_log = 0.0
+        for _recon_idx, f in enumerate(disk_files, 1):
             ruta = f["ruta_actual"]
             db_row = db_index.get(ruta)
             if db_row is None:
@@ -485,6 +496,31 @@ def _run_scan(target_path: str):
             else:
                 modified.append({**f, "db_id": db_row["id"]})
 
+            # Throttled progress update — every 500 files or every 1.5s
+            if _recon_idx % 500 == 0:
+                _t_now = time.monotonic()
+                with _lock:
+                    _ss.hechos = _recon_idx
+                    _ss.archivo_actual = f["nombre"]
+                    elapsed = _t_now - _ss.t_inicio_fase
+                    if elapsed > 0:
+                        _ss.eta_segundos = elapsed / _recon_idx * (_total_disk - _recon_idx)
+                if _t_now - _t_last_recon_log >= 3.0:
+                    _t_last_recon_log = _t_now
+                    pct = _recon_idx * 100 // _total_disk
+                    nuevos_acc = len(new_files)
+                    modif_acc = len(modified)
+                    _log_scan(
+                        "info",
+                        f"Comparando con BD: {_recon_idx:,}/{_total_disk:,} ({pct}%)"
+                        f" — {nuevos_acc:,} nuevos · {modif_acc:,} modificados hasta ahora"
+                        f" · {f['nombre']}",
+                    )
+
+        with _lock:
+            _ss.hechos = _total_disk
+            _ss.eta_segundos = 0.0
+
         for ruta, db_row in db_index.items():
             if ruta not in disk_paths:
                 disappeared_ids.append(db_row["id"])
@@ -497,6 +533,14 @@ def _run_scan(target_path: str):
             f"Reconciliación: {len(new_files):,} nuevos · {len(modified):,} modificados"
             f" · {len(unchanged):,} sin cambios · {len(disappeared_ids):,} desaparecidos",
         )
+
+        # ── Re-categorize files whose extension mapping changed since last scan ─
+        _recategorized = database.recategorize_by_extension(
+            scanner.EXTENSION_MAP, scanner.CATEGORIA_IDS
+        )
+        if _recategorized:
+            _log_scan("ok", f"Extensiones actualizadas: {_recategorized:,} archivo(s) recategorizados")
+
         # Count how many of the new/modified files are analyzable docs/images
         _doc_count = sum(1 for f in [*new_files, *modified] if f["extension"] in scanner.DOC_EXTS or f["extension"] in scanner.IMG_EXTS)
         if _doc_count > 0:
@@ -569,7 +613,14 @@ def _run_scan(target_path: str):
         to_analyze: dict[str, int] = {}
 
         if new_files and not _ss.cancelled:
-            _log_scan("info", f"Insertando {len(new_files):,} archivos nuevos en BD…")
+            _n_new = len(new_files)
+            _log_scan("info", f"Insertando {_n_new:,} archivos nuevos en BD…")
+            with _lock:
+                _ss.fase = "reconciliando"
+                _ss.hechos = 0
+                _ss.total = _n_new
+                _ss.archivo_actual = "Preparando inserción en lote…"
+                _ss.t_inicio_fase = time.monotonic()
             # Build batch rows
             batch_rows = [
                 {
@@ -585,14 +636,19 @@ def _run_scan(target_path: str):
                 }
                 for f in new_files
             ]
+            with _lock:
+                _ss.archivo_actual = f"Insertando {_n_new:,} registros en BD…"
             new_ids = database.insert_archivos_batch(batch_rows)
+            _log_scan("info", f"Inserción completada: {len(new_ids):,} registros en BD")
 
             # Batch historial insert
             historial_entries = [(aid, None, f["ruta_actual"], "indexar") for aid, f in zip(new_ids, new_files)]
             database.insert_historial_batch(historial_entries)
 
             # Post-insert: cache lookup and queue for analysis
-            for f, aid in zip(new_files, new_ids):
+            with _lock:
+                _ss.archivo_actual = "Verificando caché de análisis…"
+            for _ci, (f, aid) in enumerate(zip(new_files, new_ids), 1):
                 if _ss.cancelled:
                     break
                 h = hash_map.get(f["ruta_actual"], "")
@@ -610,15 +666,34 @@ def _run_scan(target_path: str):
                 elif f["extension"] in scanner.IMG_EXTS and _vision_available:
                     if f["tamaño_bytes"] <= VISION_MAX_MB * 1024 * 1024:
                         to_analyze[f["ruta_actual"]] = aid
+                if _ci % 500 == 0:
+                    with _lock:
+                        _ss.hechos = _ci
+                        _ss.archivo_actual = f"Caché: {f['nombre']}"
 
-            _log_scan("ok", f"{len(new_files):,} archivos nuevos insertados · {cache_hits} caché hits")
+            _log_scan("ok", f"{len(new_files):,} archivos nuevos insertados · {cache_hits} caché hits · {len(to_analyze)} a analizar")
 
         # ── Update modified files ─────────────────────────────────────────────
-        if modified and not _ss.cancelled:
-            _log_scan("info", f"Actualizando {len(modified):,} archivos modificados…")
-        for f in modified:
+        _n_modified = len(modified)
+        if _n_modified and not _ss.cancelled:
+            _log_scan("info", f"Actualizando {_n_modified:,} archivos modificados en BD…")
+            with _lock:
+                _ss.fase = "reconciliando"
+                _ss.hechos = 0
+                _ss.total = _n_modified
+                _ss.archivo_actual = ""
+                _ss.t_inicio_fase = time.monotonic()
+        for _mod_idx, f in enumerate(modified, 1):
             if _ss.cancelled:
                 break
+            with _lock:
+                _ss.hechos = _mod_idx
+                _ss.archivo_actual = f["nombre"]
+                _elapsed_mod = time.monotonic() - _ss.t_inicio_fase
+                if _elapsed_mod > 0 and _mod_idx > 0:
+                    _ss.eta_segundos = _elapsed_mod / _mod_idx * (_n_modified - _mod_idx)
+            if _mod_idx % 50 == 0 or _mod_idx == _n_modified:
+                _log_scan("info", f"Actualizando [{_mod_idx}/{_n_modified}]: {f['nombre']}")
             h = hash_map.get(f["ruta_actual"], "")
             database.update_archivo_full(
                 archivo_id=f["db_id"],
@@ -945,6 +1020,28 @@ def api_open_file(archivo_id):
     return jsonify({"success": True})
 
 
+@app.route("/api/open-path", methods=["POST"])
+def api_open_path():
+    """Open or reveal a file by its full path (no DB lookup required)."""
+    import os as _os
+    data    = request.get_json() or {}
+    path_s  = (data.get("path") or "").strip()
+    action  = data.get("action", "reveal")   # 'open' | 'reveal'
+    if not path_s:
+        return jsonify({"error": "Ruta no proporcionada"}), 400
+    path = Path(path_s)
+    if not path.exists():
+        return jsonify({"error": f"El archivo no existe: {path}"}), 404
+    try:
+        if action == "open":
+            _os.startfile(str(path))
+        else:
+            subprocess.Popen(["explorer", "/select,", str(path)])
+        return jsonify({"success": True})
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+
 @app.route("/api/ollama-status")
 def api_ollama_status():
     """Check Ollama availability and installed models."""
@@ -985,10 +1082,11 @@ def api_system_check():
     except Exception:
         disk_free_gb = disk_total_gb = 0
 
-    # ── GPU detection (NVIDIA → AMD/Intel via wmic) ───────────────────────
+    # ── GPU detection (NVIDIA → AMD/Intel via PowerShell) ────────────────
     gpu_name    = None
     gpu_vram_gb = None
     gpu_cuda    = False   # True only when CUDA-capable (NVIDIA)
+    gpu_amd     = False   # True when AMD Radeon detected (ROCm/HIP capable)
 
     # 1) NVIDIA via nvidia-smi
     try:
@@ -1004,24 +1102,55 @@ def api_system_check():
     except Exception:
         pass
 
-    # 2) Any GPU via wmic (Windows — returns one row per adapter)
+    # 2) Any GPU via PowerShell Win32_VideoController (replaces deprecated wmic)
     if not gpu_name and platform.system() == "Windows":
         try:
+            ps_cmd = (
+                "Get-WmiObject Win32_VideoController"
+                " | Select-Object Name,AdapterRAM"
+                " | ForEach-Object { $_.Name + '|' + $_.AdapterRAM }"
+            )
             out = subprocess.check_output(
-                ["wmic", "path", "win32_VideoController",
-                 "get", "Name,AdapterRAM", "/value"],
-                timeout=6, stderr=subprocess.DEVNULL,
+                ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps_cmd],
+                timeout=8, stderr=subprocess.DEVNULL,
             ).decode(errors="ignore")
-            names, vrams = [], []
+            adapters = []
             for line in out.splitlines():
                 line = line.strip()
-                if line.startswith("Name=") and line[5:]:
-                    names.append(line[5:])
-                elif line.startswith("AdapterRAM=") and line[11:].isdigit():
-                    vrams.append(int(line[11:]))
-            if names:
-                gpu_name    = names[0]
-                gpu_vram_gb = round(vrams[0] / 1024**3, 1) if vrams else None
+                if "|" not in line:
+                    continue
+                name, _, ram_str = line.partition("|")
+                name = name.strip()
+                if not name:
+                    continue
+                try:
+                    vram_bytes = int(ram_str.strip())
+                except ValueError:
+                    vram_bytes = 0
+                adapters.append((name, vram_bytes))
+            # Pick the adapter with the most VRAM (skip tiny integrated adapters)
+            adapters.sort(key=lambda x: x[1], reverse=True)
+            if adapters:
+                gpu_name = adapters[0][0]
+                raw_vram = adapters[0][1]
+                # WMI caps AdapterRAM at ~4 GB for cards with more; detect known VRAM from name
+                gpu_vram_gb = round(raw_vram / 1024**3, 1) if raw_vram > 0 else None
+                # Detect known large-VRAM cards from their name
+                _known_vram = {
+                    "7900 xtx": 24, "7900 xt": 20, "7800 xt": 16,
+                    "7700 xt": 12, "7600 xt": 16, "7600": 8,
+                    "6900 xt": 16, "6800 xt": 16, "6800": 16,
+                    "6700 xt": 12, "6600 xt": 8, "6600": 8,
+                    "4090": 24, "4080": 16, "4070 ti": 12, "4070": 12,
+                    "4060 ti": 16, "4060": 8, "3090": 24, "3080": 10, "3070": 8,
+                }
+                name_lower = gpu_name.lower()
+                for key, vram in _known_vram.items():
+                    if key in name_lower:
+                        gpu_vram_gb = vram
+                        break
+                # AMD ROCm flag — RX 6000/7000 series supports Ollama GPU offload
+                gpu_amd = "radeon" in name_lower or "amd" in name_lower
         except Exception:
             pass
 
@@ -1106,12 +1235,22 @@ def api_system_check():
                 f"VRAM GPU baja: **{gpu_vram_gb} GB** — algunos modelos no cabrán en GPU "
                 "y usarán CPU como fallback"
             )
-        # else: GPU CUDA con VRAM suficiente → ningún aviso
+        # else: GPU CUDA con VRAM suficiente → sin aviso
+    elif gpu_amd:
+        # AMD GPU — Ollama soporta ROCm/HIP en RX 6000/7000 (Windows experimental)
+        vram_str = f" · {gpu_vram_gb} GB VRAM" if gpu_vram_gb else ""
+        if gpu_vram_gb and gpu_vram_gb >= 8:
+            pass  # RX 7800 XT con 16 GB → sin aviso, Ollama la aprovecha bien
+        else:
+            warnings.append(
+                f"GPU AMD detectada (**{gpu_name}**{vram_str}) — "
+                "Ollama usará ROCm/HIP (experimental en Windows; funciona en la mayoría de casos)"
+            )
     else:
-        # GPU sin CUDA (AMD/Intel) o sin GPU
+        # GPU sin CUDA/ROCm o sin GPU
         if gpu_name:
             warnings.append(
-                f"GPU detectada (**{gpu_name}**) pero sin soporte CUDA — "
+                f"GPU detectada (**{gpu_name}**) pero sin soporte CUDA/ROCm — "
                 "Ollama usará CPU para inferencia (más lento, funcional)"
             )
         else:
@@ -1146,6 +1285,7 @@ def api_system_check():
         "gpu_name":           gpu_name,
         "gpu_vram_gb":        gpu_vram_gb,
         "gpu_cuda":           gpu_cuda,
+        "gpu_amd":            gpu_amd,
         "ollama_running":     oll_status["running"],
         "models":             models_info,
         "ram_core_needed_gb": round(ram_core_need, 1),
@@ -1230,6 +1370,11 @@ def api_undo_all():
 @app.route("/duplicados")
 def duplicados():
     grupos = database.get_grupos_duplicados()
+    for g in grupos:
+        nombres = [a["nombre"] for a in g["archivos"]]
+        distinct = sorted(set(nombres))
+        g["distinct_nombres"] = distinct
+        g["all_same_name"] = len(distinct) == 1
     total_recuperable = sum(g["espacio_recuperable"] for g in grupos)
     return render_template(
         "duplicados.html",
@@ -1573,7 +1718,15 @@ def api_plan_generar():
     archivo_ids = [int(i) for i in archivo_ids_raw if str(i).lstrip("-").isdigit()] or None
     plan_id = planner.generar_plan(carpeta_raiz, archivo_ids)
     plan = database.get_plan(plan_id)
-    return jsonify({"plan_id": plan_id, "total_items": plan["total_items"]})
+    items = database.get_plan_items(plan_id)
+    # Gather quick stats for the generation log
+    paquetes = sum(1 for i in items if "/" in (i.get("motivo") or "") and any(
+        kw in (i.get("motivo") or "").lower() for kw in ("juego", "pc", "switch", "ps3", "xbox", "psp")))
+    return jsonify({
+        "plan_id": plan_id,
+        "total_items": plan["total_items"],
+        "stats": {"normales": plan["total_items"] - paquetes, "paquetes": paquetes},
+    })
 
 
 @app.route("/api/plan/<int:plan_id>/items/<int:item_id>", methods=["PATCH"])
@@ -1725,6 +1878,14 @@ def api_archivos():
     return jsonify(archivos)
 
 
+@app.route("/api/archivos/extensiones")
+def api_archivos_extensiones():
+    raw_cat = request.args.get("categoria_id", "")
+    if not raw_cat.isdigit():
+        return jsonify({"error": "categoria_id requerido"}), 400
+    return jsonify(database.get_extension_breakdown(int(raw_cat)))
+
+
 # ── Semantic search ───────────────────────────────────────────────────────────
 
 
@@ -1775,6 +1936,282 @@ def api_watch_stop():
 @app.route("/api/watch/status")
 def api_watch_status():
     return jsonify(_watcher_module.manager.get_status())
+
+
+# ── System-wide file search ──────────────────────────────────────────────────
+
+
+def _search_windows_index(q: str, ext: str, max_results: int = 300) -> tuple[list[dict], str]:
+    """Query Windows Search index via ADODB (fast, instant).
+
+    Returns (results_list, engine_name).
+    """
+    import datetime as _dt
+
+    # Build WHERE clause
+    conditions = ["SCOPE='file:'"]
+    q_safe = q.replace("'", "''")
+    if q:
+        conditions.append(f"System.FileName LIKE '%{q_safe}%'")
+    if ext:
+        e = ext.lstrip(".").replace("'", "")
+        conditions.append(f"System.FileName LIKE '%.{e}'")
+
+    sql = (
+        f"SELECT TOP {max_results} System.ItemPathDisplay, System.FileName, "
+        f"System.Size, System.DateModified "
+        f"FROM SystemIndex WHERE {' AND '.join(conditions)} "
+        f"ORDER BY System.DateModified DESC"
+    )
+
+    ps_script = f"""
+try {{
+    $conn = New-Object -ComObject ADODB.Connection
+    $conn.Open('Provider=Search.CollatorDSO;Extended Properties=Application=Windows;')
+    $rs = New-Object -ComObject ADODB.Recordset
+    $rs.Open("{sql.replace('"', "'")}", $conn)
+    $out = @()
+    while (-not $rs.EOF) {{
+        $path = $rs.Fields['System.ItemPathDisplay'].Value
+        $name = $rs.Fields['System.FileName'].Value
+        $size = $rs.Fields['System.Size'].Value
+        $date = $rs.Fields['System.DateModified'].Value
+        if ($path) {{
+            $out += "$path`t$name`t$size`t$date"
+        }}
+        $rs.MoveNext()
+    }}
+    $rs.Close(); $conn.Close()
+    $out -join "`n"
+}} catch {{
+    Write-Output "ERROR:$_"
+}}
+"""
+    try:
+        proc = subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps_script],
+            capture_output=True, text=True, timeout=12,
+        )
+        lines = proc.stdout.strip().splitlines()
+        if lines and lines[0].startswith("ERROR:"):
+            return [], "fallback"
+        results = []
+        for line in lines:
+            parts = line.split("\t", 3)
+            if len(parts) < 2:
+                continue
+            path_str = parts[0].strip()
+            size_str = parts[2].strip() if len(parts) > 2 else "0"
+            date_str = parts[3].strip() if len(parts) > 3 else ""
+            try:
+                size = int(size_str) if size_str else 0
+            except ValueError:
+                size = 0
+            results.append({
+                "path": path_str,
+                "name": Path(path_str).name,
+                "ext": Path(path_str).suffix.lower(),
+                "size": size,
+                "date": date_str[:19] if date_str else "",
+            })
+        return results, "Windows Search"
+    except Exception:
+        return [], "fallback"
+
+
+def _search_fallback(q: str, ext: str, max_results: int = 200) -> tuple[list[dict], str]:
+    """Fast os.scandir fallback for when Windows Search is unavailable.
+    Scans all local drives, skips heavy system dirs, caps at max_results.
+    """
+    import string, os as _os, time as _t
+
+    q_lower = q.lower() if q else ""
+    ext_lower = ("." + ext.lstrip(".").lower()) if ext else ""
+    results: list[dict] = []
+    deadline = _t.monotonic() + 20.0
+    skip_dirs = frozenset({
+        "windows", "system volume information", "$recycle.bin",
+        "programdata", "recovery", "msocache", "perflogs",
+    })
+
+    drives = [f"{d}:\\" for d in string.ascii_uppercase if _os.path.exists(f"{d}:\\")]
+
+    def _walk(root: str):
+        try:
+            with _os.scandir(root) as it:
+                for entry in it:
+                    if _t.monotonic() > deadline or len(results) >= max_results:
+                        return
+                    if entry.is_dir(follow_symlinks=False):
+                        if entry.name.lower() not in skip_dirs and not entry.name.startswith("$"):
+                            _walk(entry.path)
+                    elif entry.is_file(follow_symlinks=False):
+                        name = entry.name
+                        if ext_lower and not name.lower().endswith(ext_lower):
+                            continue
+                        if q_lower and q_lower not in name.lower():
+                            continue
+                        try:
+                            st = entry.stat()
+                            results.append({
+                                "path": entry.path,
+                                "name": name,
+                                "ext": Path(name).suffix.lower(),
+                                "size": st.st_size,
+                                "date": "",
+                            })
+                        except OSError:
+                            pass
+        except (PermissionError, OSError):
+            pass
+
+    for drive in drives:
+        _walk(drive)
+        if len(results) >= max_results or _t.monotonic() > deadline:
+            break
+
+    return results, "Escaneo directo"
+
+
+@app.route("/buscar")
+def buscar():
+    return render_template("buscar.html")
+
+
+@app.route("/api/buscar-sistema")
+def api_buscar_sistema():
+    q   = request.args.get("q", "").strip()
+    ext = request.args.get("ext", "").strip().lstrip(".")
+    if not q and not ext:
+        return jsonify({"results": [], "total": 0, "engine": "", "truncated": False})
+
+    results, engine = _search_windows_index(q, ext)
+    if not results and engine == "fallback":
+        results, engine = _search_fallback(q, ext)
+
+    truncated = len(results) >= 300
+    return jsonify({
+        "results":   results[:300],
+        "total":     len(results),
+        "engine":    engine,
+        "truncated": truncated,
+    })
+
+
+# ── Model installer ──────────────────────────────────────────────────────────
+
+
+@app.route("/api/install-model", methods=["POST"])
+def api_install_model():
+    """Open a new terminal window running 'ollama pull <model>'."""
+    data = request.get_json() or {}
+    model = (data.get("model") or "").strip()
+    if not model or not re.match(r'^[\w./:@-]+$', model):
+        return jsonify({"error": "Nombre de modelo inválido"}), 400
+    try:
+        # Open a PowerShell window that runs ollama pull and stays open
+        subprocess.Popen(
+            ["powershell", "-NoExit", "-Command", f"ollama pull {model}"],
+            creationflags=0x00000010,  # CREATE_NEW_CONSOLE
+        )
+        return jsonify({"ok": True})
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+
+# ── PLEX library renamer ─────────────────────────────────────────────────────
+
+
+@app.route("/plex")
+def plex():
+    return render_template("plex.html")
+
+
+@app.route("/api/plex/analizar", methods=["POST"])
+def api_plex_analizar():
+    import plex_renamer as _pr
+    data = request.get_json() or {}
+    root = (data.get("root") or "").strip()
+    show_name = (data.get("show_name") or "").strip() or None
+    if not root:
+        return jsonify({"error": "Ruta no proporcionada"}), 400
+    if not Path(root).is_dir():
+        return jsonify({"error": f"La carpeta no existe: {root}"}), 400
+    try:
+        ops = _pr.scan_for_operations(root, show_name)
+        detected_name = show_name or _pr._sanitize_show_name(Path(root).name)
+        return jsonify({"ops": ops, "total": len(ops), "show_name": detected_name})
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.route("/api/plex/aplicar", methods=["POST"])
+def api_plex_aplicar():
+    data = request.get_json() or {}
+    ops = data.get("ops", [])
+    root = (data.get("root") or "").strip()
+
+    timestamp = time.strftime("%Y-%m-%d_%H%M%S")
+    backup_dir = Path(__file__).parent.parent / "data" / "backup_plex" / timestamp
+
+    _eid = database.create_ejecucion("plex", f"PLEX rename: {root}")
+
+    ok_count = 0
+    failed_count = 0
+    errores: list[str] = []
+
+    for op in ops:
+        if not op.get("approved"):
+            continue
+        op_type = op.get("type")
+        src_path = Path(op.get("src", ""))
+
+        try:
+            if op_type == "rename_file":
+                dst_str = op.get("dst")
+                if not dst_str:
+                    continue
+                dst_path = Path(dst_str)
+                if not src_path.exists():
+                    continue
+                dst_path.parent.mkdir(parents=True, exist_ok=True)
+                # Avoid collision
+                final_dst = dst_path
+                n = 1
+                while final_dst.exists() and final_dst != src_path:
+                    final_dst = dst_path.with_stem(f"{dst_path.stem}_{n}")
+                    n += 1
+                src_path.rename(final_dst)
+                database.log_entrada(_eid, "ok",
+                    f"Renombrado: {src_path.name} → {final_dst.name}")
+                ok_count += 1
+
+            elif op_type in ("delete_compress", "delete_folder"):
+                if not src_path.exists():
+                    continue
+                backup_dir.mkdir(parents=True, exist_ok=True)
+                bak = backup_dir / src_path.name
+                n = 1
+                while bak.exists():
+                    bak = backup_dir / f"{src_path.stem}_{n}{src_path.suffix}"
+                    n += 1
+                src_path.rename(bak)
+                label = "carpeta" if op_type == "delete_folder" else "archivo"
+                database.log_entrada(_eid, "ok",
+                    f"Movido a backup ({label}): {src_path.name}")
+                ok_count += 1
+
+        except Exception as exc:
+            msg = f"{op_type} | {src_path.name} | {exc}"
+            failed_count += 1
+            errores.append(msg)
+            database.log_entrada(_eid, "error", msg)
+
+    estado = "completado" if failed_count == 0 else "error"
+    database.finish_ejecucion(_eid, estado,
+        json.dumps({"ok": ok_count, "failed": failed_count}))
+
+    return jsonify({"ok": ok_count, "failed": failed_count, "errores": errores[:5]})
 
 
 # ── Server entry point ────────────────────────────────────────────────────────

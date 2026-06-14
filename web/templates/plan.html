@@ -39,6 +39,16 @@
         <i class="fa-solid fa-list-check"></i> Generar plan
       </button>
     </div>
+
+    <!-- Generation log panel (hidden until clicked) -->
+    <div id="plan-log-panel" class="hidden mt-4 rounded-lg border border-gray-100 dark:border-gray-800
+                                     bg-gray-50 dark:bg-gray-800/50 overflow-hidden">
+      <div class="px-3 py-2 border-b border-gray-100 dark:border-gray-800 flex items-center gap-2">
+        <i id="plan-log-icon" class="fa-solid fa-spinner fa-spin text-cyan-500 text-xs"></i>
+        <span id="plan-log-status" class="text-xs font-medium text-gray-600 dark:text-gray-300">Analizando archivos indexados…</span>
+      </div>
+      <div id="plan-log-lines" class="px-3 py-2 space-y-0.5 font-mono text-[11px] max-h-36 overflow-y-auto"></div>
+    </div>
   </div>
 
   <!-- Planes recientes -->
@@ -100,6 +110,31 @@ async function browseFolder() {
   if (data.path) document.getElementById('raiz-input').value = data.path;
 }
 
+let _planLogTimer = null;
+
+function _planLog(msg, level='info') {
+  const el = document.getElementById('plan-log-lines');
+  if (!el) return;
+  const colors = { info:'text-gray-500 dark:text-gray-400', ok:'text-emerald-600 dark:text-emerald-400',
+                   warn:'text-amber-500', error:'text-red-500' };
+  const icons  = { info:'·', ok:'✓', warn:'⚠', error:'✗' };
+  const line = document.createElement('div');
+  line.className = colors[level] || colors.info;
+  line.textContent = `${icons[level]||'·'} ${msg}`;
+  el.appendChild(line);
+  el.scrollTop = el.scrollHeight;
+}
+
+function _planLogSetStatus(msg, spinning=true) {
+  document.getElementById('plan-log-status').textContent = msg;
+  const icon = document.getElementById('plan-log-icon');
+  if (spinning) {
+    icon.className = 'fa-solid fa-spinner fa-spin text-cyan-500 text-xs';
+  } else {
+    icon.className = 'fa-solid fa-circle-check text-emerald-500 text-xs';
+  }
+}
+
 async function generarPlan() {
   const raiz = document.getElementById('raiz-input').value.trim();
   if (!raiz) { showToast('Introduce una carpeta raíz', 'warning'); return; }
@@ -108,20 +143,58 @@ async function generarPlan() {
   btn.disabled = true;
   btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Generando…';
 
+  // Show log panel
+  const panel = document.getElementById('plan-log-panel');
+  panel.classList.remove('hidden');
+  document.getElementById('plan-log-lines').innerHTML = '';
+  _planLogSetStatus('Analizando archivos indexados…', true);
+  _planLog('Consultando base de datos…');
+
+  // Animated steps while waiting for the synchronous API
+  const steps = [
+    [900,  'Detectando paquetes y carpetas de juegos…'],
+    [2000, 'Agrupando por categorías y etiquetas…'],
+    [3500, 'Calculando rutas de destino…'],
+    [5000, 'Insertando movimientos en el plan…'],
+  ];
+  const timers = steps.map(([ms, msg]) => setTimeout(() => _planLog(msg), ms));
+
   try {
     const res = await fetch('/api/plan/generar', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({carpeta_raiz: raiz}),
     });
+    timers.forEach(clearTimeout);
     const data = await res.json();
-    if (!res.ok) { showToast(data.error || 'Error al generar el plan', 'error'); return; }
-    if (data.total_items === 0) {
-      showToast('Todos los archivos ya están en su destino correcto. Sin movimientos necesarios.', 'info');
+
+    if (!res.ok) {
+      _planLogSetStatus('Error al generar el plan', false);
+      document.getElementById('plan-log-icon').className = 'fa-solid fa-circle-xmark text-red-500 text-xs';
+      _planLog(data.error || 'Error desconocido', 'error');
+      showToast(data.error || 'Error al generar el plan', 'error');
       return;
     }
-    window.location.href = '/plan/' + data.plan_id;
+
+    if (data.total_items === 0) {
+      _planLogSetStatus('Sin movimientos necesarios', false);
+      _planLog('Todos los archivos ya están en la ubicación correcta.', 'ok');
+      showToast('Todos los archivos ya están en su destino correcto.', 'info');
+      return;
+    }
+
+    _planLog(`Plan generado: ${data.total_items} movimiento(s) propuesto(s).`, 'ok');
+    if (data.stats) {
+      _planLog(`${data.stats.normales||0} normales · ${data.stats.paquetes||0} paquetes`, 'info');
+    }
+    _planLogSetStatus(`Listo — ${data.total_items} movimientos. Redirigiendo…`, false);
+    setTimeout(() => { window.location.href = '/plan/' + data.plan_id; }, 800);
+
   } catch (e) {
+    timers.forEach(clearTimeout);
+    _planLogSetStatus('Error de conexión', false);
+    document.getElementById('plan-log-icon').className = 'fa-solid fa-circle-xmark text-red-500 text-xs';
+    _planLog('Error de red: ' + e.message, 'error');
     showToast('Error de red: ' + e.message, 'error');
   } finally {
     btn.disabled = false;

@@ -1,0 +1,317 @@
+{% extends "base.html" %}
+{% block title %}Buscar en PC — FileOrganizer AI{% endblock %}
+{% block page_title %}Buscar en PC{% endblock %}
+
+{% block head %}
+<style>
+  #search-input:focus { outline: none; }
+  .ext-chip {
+    display:inline-flex; align-items:center; gap:0.3rem;
+    padding:0.25rem 0.65rem; border-radius:9999px;
+    font-size:0.72rem; font-weight:600; font-family:monospace;
+    border:1px solid var(--border); background:var(--surface-2);
+    color:var(--text-2); cursor:pointer; transition:all 0.15s;
+  }
+  .ext-chip:hover, .ext-chip.active {
+    background:rgba(99,102,241,0.12);
+    border-color:rgba(99,102,241,0.4);
+    color:#6366F1;
+  }
+  .result-row { display:flex; align-items:center; gap:0.75rem;
+    padding:0.45rem 1rem; border-bottom:1px solid var(--border-soft);
+    transition:background 0.1s; }
+  .result-row:hover { background:var(--surface-2); }
+  .result-row:last-child { border-bottom:none; }
+  .result-name { font-size:0.82rem; font-weight:600; color:var(--text-1);
+    white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0; flex:1; }
+  .result-path { font-size:0.7rem; color:var(--text-3); white-space:nowrap;
+    overflow:hidden; text-overflow:ellipsis; min-width:0; flex:2; }
+  .result-size { font-size:0.7rem; color:var(--text-3); white-space:nowrap; flex-shrink:0; width:5rem; text-align:right; }
+  .result-date { font-size:0.7rem; color:var(--text-3); white-space:nowrap; flex-shrink:0; width:9rem; text-align:right; }
+  .result-actions { display:flex; gap:0.25rem; flex-shrink:0; }
+  .icon-ext {
+    width:1.75rem; height:1.75rem; border-radius:0.375rem;
+    display:flex; align-items:center; justify-content:center;
+    font-size:0.65rem; font-weight:700; font-family:monospace;
+    flex-shrink:0; border:1px solid transparent;
+  }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="max-w-6xl mx-auto space-y-4">
+
+  <!-- Search bar -->
+  <div class="bg-white dark:bg-gray-900 rounded-2xl border border-gray-200 dark:border-gray-800 p-4">
+    <div class="flex items-center gap-3 mb-3">
+      <div class="flex-1 flex items-center gap-2 px-4 py-2.5 bg-gray-50 dark:bg-gray-800
+                  border border-gray-200 dark:border-gray-700 rounded-xl
+                  focus-within:border-indigo-400 dark:focus-within:border-indigo-500
+                  focus-within:ring-2 focus-within:ring-indigo-100 dark:focus-within:ring-indigo-900/40 transition">
+        <i class="fa-solid fa-magnifying-glass text-gray-400 text-sm flex-shrink-0"></i>
+        <input id="search-input" type="text" autocomplete="off" spellcheck="false"
+               placeholder="Buscar por nombre de archivo… (ej: factura, .pdf, imagen 2024)"
+               class="flex-1 bg-transparent text-sm text-gray-900 dark:text-gray-100 placeholder-gray-400"
+               oninput="onSearchInput()" onkeydown="if(event.key==='Escape')clearSearch()">
+        <button id="clear-btn" onclick="clearSearch()"
+                class="hidden text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition">
+          <i class="fa-solid fa-xmark text-sm"></i>
+        </button>
+      </div>
+      <div id="engine-badge" class="hidden text-[10px] font-medium px-2.5 py-1 rounded-full
+           bg-emerald-50 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300
+           border border-emerald-200 dark:border-emerald-800 flex-shrink-0">
+        <i class="fa-solid fa-bolt mr-1"></i><span id="engine-name"></span>
+      </div>
+    </div>
+
+    <!-- Extension quick-filters -->
+    <div class="flex flex-wrap gap-1.5" id="ext-chips">
+      <span class="text-[10px] font-bold uppercase tracking-widest text-gray-400 self-center mr-1">Filtrar:</span>
+      <button class="ext-chip" onclick="toggleExt('.pdf')"><i class="fa-solid fa-file-pdf text-red-400"></i>.pdf</button>
+      <button class="ext-chip" onclick="toggleExt('.docx')"><i class="fa-solid fa-file-word text-blue-400"></i>.docx</button>
+      <button class="ext-chip" onclick="toggleExt('.xlsx')"><i class="fa-solid fa-file-excel text-green-400"></i>.xlsx</button>
+      <button class="ext-chip" onclick="toggleExt('.mp4')"><i class="fa-solid fa-film text-purple-400"></i>.mp4</button>
+      <button class="ext-chip" onclick="toggleExt('.mkv')"><i class="fa-solid fa-film text-purple-400"></i>.mkv</button>
+      <button class="ext-chip" onclick="toggleExt('.mp3')"><i class="fa-solid fa-music text-amber-400"></i>.mp3</button>
+      <button class="ext-chip" onclick="toggleExt('.jpg')"><i class="fa-solid fa-image text-emerald-400"></i>.jpg</button>
+      <button class="ext-chip" onclick="toggleExt('.png')"><i class="fa-solid fa-image text-emerald-400"></i>.png</button>
+      <button class="ext-chip" onclick="toggleExt('.zip')"><i class="fa-solid fa-file-zipper text-gray-400"></i>.zip</button>
+      <button class="ext-chip" onclick="toggleExt('.exe')"><i class="fa-solid fa-gear text-orange-400"></i>.exe</button>
+      <button class="ext-chip" onclick="toggleExt('.epub')"><i class="fa-solid fa-book text-violet-400"></i>.epub</button>
+      <button class="ext-chip" onclick="toggleExt('.txt')"><i class="fa-solid fa-file-lines text-gray-400"></i>.txt</button>
+    </div>
+  </div>
+
+  <!-- Status / loading -->
+  <div id="search-status" class="hidden text-sm text-gray-500 dark:text-gray-400 flex items-center gap-2 px-1">
+    <i id="status-icon" class="fa-solid fa-spinner fa-spin text-indigo-400 text-xs"></i>
+    <span id="status-text">Buscando…</span>
+  </div>
+
+  <!-- Results -->
+  <div id="results-panel" class="hidden bg-white dark:bg-gray-900 rounded-2xl border border-gray-200 dark:border-gray-800 overflow-hidden">
+    <!-- Header -->
+    <div class="px-4 py-2.5 border-b border-gray-100 dark:border-gray-800 flex items-center gap-2">
+      <span class="text-xs font-semibold text-gray-600 dark:text-gray-400">
+        <span id="result-count">0</span> resultados
+      </span>
+      <span id="truncated-note" class="hidden ml-2 text-xs text-amber-600 dark:text-amber-400">
+        <i class="fa-solid fa-triangle-exclamation mr-1"></i>Mostrando los primeros 300
+      </span>
+    </div>
+    <!-- Table header -->
+    <div class="result-row bg-gray-50 dark:bg-gray-800/60 border-b border-gray-100 dark:border-gray-800 !py-2">
+      <div class="w-7 flex-shrink-0"></div>
+      <div class="result-name text-[10px] font-bold uppercase tracking-wide text-gray-400">Nombre</div>
+      <div class="result-path text-[10px] font-bold uppercase tracking-wide text-gray-400">Ubicación</div>
+      <div class="result-size text-[10px] font-bold uppercase tracking-wide text-gray-400">Tamaño</div>
+      <div class="result-date text-[10px] font-bold uppercase tracking-wide text-gray-400">Modificado</div>
+      <div class="result-actions" style="width:3.5rem"></div>
+    </div>
+    <!-- Rows -->
+    <div id="results-body" class="overflow-y-auto" style="max-height:65vh"></div>
+  </div>
+
+  <!-- Empty state -->
+  <div id="empty-state" class="text-center py-20 text-gray-400">
+    <i class="fa-solid fa-magnifying-glass text-5xl mb-4 block opacity-15"></i>
+    <p class="text-base font-medium text-gray-500 dark:text-gray-400">Busca cualquier archivo en tu PC</p>
+    <p class="text-sm mt-1 opacity-70">Usa el campo de arriba o filtra por extensión</p>
+  </div>
+
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// ── State ─────────────────────────────────────────────────────────────────────
+let _debounce = null;
+let _activeExt = '';
+let _lastQuery = '';
+let _controller = null;
+
+// ── Ext colors ────────────────────────────────────────────────────────────────
+const EXT_CFG = {
+  '.pdf':  { bg:'#FEE2E2', fg:'#B91C1C', dark_bg:'#450a0a', dark_fg:'#FCA5A5' },
+  '.docx': { bg:'#DBEAFE', fg:'#1D4ED8', dark_bg:'#0c1a3d', dark_fg:'#93C5FD' },
+  '.doc':  { bg:'#DBEAFE', fg:'#1D4ED8', dark_bg:'#0c1a3d', dark_fg:'#93C5FD' },
+  '.xlsx': { bg:'#D1FAE5', fg:'#065F46', dark_bg:'#052e16', dark_fg:'#6EE7B7' },
+  '.xls':  { bg:'#D1FAE5', fg:'#065F46', dark_bg:'#052e16', dark_fg:'#6EE7B7' },
+  '.mp4':  { bg:'#EDE9FE', fg:'#5B21B6', dark_bg:'#1e1030', dark_fg:'#C4B5FD' },
+  '.mkv':  { bg:'#EDE9FE', fg:'#5B21B6', dark_bg:'#1e1030', dark_fg:'#C4B5FD' },
+  '.avi':  { bg:'#EDE9FE', fg:'#5B21B6', dark_bg:'#1e1030', dark_fg:'#C4B5FD' },
+  '.mp3':  { bg:'#FEF3C7', fg:'#92400E', dark_bg:'#2a1806', dark_fg:'#FCD34D' },
+  '.jpg':  { bg:'#D1FAE5', fg:'#065F46', dark_bg:'#052e16', dark_fg:'#86EFAC' },
+  '.jpeg': { bg:'#D1FAE5', fg:'#065F46', dark_bg:'#052e16', dark_fg:'#86EFAC' },
+  '.png':  { bg:'#D1FAE5', fg:'#065F46', dark_bg:'#052e16', dark_fg:'#86EFAC' },
+  '.zip':  { bg:'#F3F4F6', fg:'#374151', dark_bg:'#1c1c1c', dark_fg:'#9CA3AF' },
+  '.rar':  { bg:'#F3F4F6', fg:'#374151', dark_bg:'#1c1c1c', dark_fg:'#9CA3AF' },
+  '.exe':  { bg:'#FFEDD5', fg:'#9A3412', dark_bg:'#2a0d00', dark_fg:'#FDBA74' },
+  '.epub': { bg:'#F3E8FF', fg:'#581C87', dark_bg:'#1a0b2e', dark_fg:'#E9D5FF' },
+};
+
+function extIcon(ext) {
+  const dark = document.documentElement.classList.contains('dark');
+  const cfg = EXT_CFG[ext] || { bg:'#F3F4F6', fg:'#6B7280', dark_bg:'#1c1c1c', dark_fg:'#9CA3AF' };
+  const bg = dark ? cfg.dark_bg : cfg.bg;
+  const fg = dark ? cfg.dark_fg : cfg.fg;
+  const label = (ext || '?').replace('.','').toUpperCase().slice(0,4);
+  return `<div class="icon-ext" style="background:${bg};color:${fg};border-color:${fg}33">${label}</div>`;
+}
+
+function fmtSize(b) {
+  if (!b) return '—';
+  const u = ['B','KB','MB','GB']; let i=0, v=b;
+  while(v>=1024&&i<u.length-1){v/=1024;i++;}
+  return v.toFixed(1)+' '+u[i];
+}
+
+function fmtDate(s) {
+  if (!s) return '—';
+  try { return new Date(s).toLocaleDateString('es-ES',{day:'2-digit',month:'short',year:'numeric'}); }
+  catch { return s.slice(0,10); }
+}
+
+function esc(s){ return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+// ── Render ────────────────────────────────────────────────────────────────────
+function renderResults(data) {
+  const panel  = document.getElementById('results-panel');
+  const body   = document.getElementById('results-body');
+  const empty  = document.getElementById('empty-state');
+  const status = document.getElementById('search-status');
+  const engine = document.getElementById('engine-badge');
+
+  status.classList.add('hidden');
+
+  if (!data || !data.results || !data.results.length) {
+    panel.classList.add('hidden');
+    empty.classList.remove('hidden');
+    empty.innerHTML = `
+      <i class="fa-solid fa-face-meh text-5xl mb-4 block opacity-15"></i>
+      <p class="text-base font-medium text-gray-500 dark:text-gray-400">Sin resultados</p>
+      <p class="text-sm mt-1 opacity-70">Prueba con otro término o extensión</p>`;
+    engine.classList.add('hidden');
+    return;
+  }
+
+  document.getElementById('result-count').textContent = data.total;
+  document.getElementById('truncated-note').classList.toggle('hidden', !data.truncated);
+  document.getElementById('engine-name').textContent = data.engine;
+  engine.classList.remove('hidden');
+
+  body.innerHTML = data.results.map(r => {
+    const dir = r.path.replace(/\\/g,'/').split('/').slice(0,-1).join('/');
+    return `
+      <div class="result-row">
+        ${extIcon(r.ext)}
+        <div class="result-name" title="${esc(r.name)}">${esc(r.name)}</div>
+        <div class="result-path" title="${esc(r.path)}">${esc(dir)}</div>
+        <div class="result-size">${fmtSize(r.size)}</div>
+        <div class="result-date">${fmtDate(r.date)}</div>
+        <div class="result-actions">
+          <button onclick="openFilePath(${JSON.stringify(r.path)})"
+                  title="Abrir archivo"
+                  class="p-1.5 rounded text-gray-400 hover:text-indigo-600 dark:hover:text-indigo-400 transition">
+            <i class="fa-solid fa-up-right-from-square text-xs"></i>
+          </button>
+          <button onclick="openFolderPath(${JSON.stringify(r.path)})"
+                  title="Mostrar en explorador"
+                  class="p-1.5 rounded text-gray-400 hover:text-amber-500 transition">
+            <i class="fa-solid fa-folder-open text-xs"></i>
+          </button>
+        </div>
+      </div>`;
+  }).join('');
+
+  empty.classList.add('hidden');
+  panel.classList.remove('hidden');
+}
+
+// ── Search ────────────────────────────────────────────────────────────────────
+function doSearch() {
+  const q   = document.getElementById('search-input').value.trim();
+  const ext = _activeExt.replace('.','');
+  if (!q && !ext) {
+    document.getElementById('results-panel').classList.add('hidden');
+    document.getElementById('empty-state').classList.remove('hidden');
+    document.getElementById('search-status').classList.add('hidden');
+    document.getElementById('engine-badge').classList.add('hidden');
+    return;
+  }
+  if (q === _lastQuery && ext === _activeExt) return;
+  _lastQuery = q + '|' + ext;
+
+  if (_controller) _controller.abort();
+  _controller = new AbortController();
+
+  document.getElementById('search-status').classList.remove('hidden');
+  document.getElementById('status-icon').className = 'fa-solid fa-spinner fa-spin text-indigo-400 text-xs';
+  document.getElementById('status-text').textContent = 'Buscando en Windows Search…';
+  document.getElementById('results-panel').classList.add('hidden');
+  document.getElementById('empty-state').classList.add('hidden');
+  document.getElementById('clear-btn').classList.toggle('hidden', !q);
+
+  const params = new URLSearchParams();
+  if (q) params.set('q', q);
+  if (ext) params.set('ext', ext);
+
+  fetch('/api/buscar-sistema?' + params.toString(), { signal: _controller.signal })
+    .then(r => r.json())
+    .then(d => renderResults(d))
+    .catch(e => {
+      if (e.name === 'AbortError') return;
+      document.getElementById('status-text').textContent = 'Error de búsqueda';
+      document.getElementById('status-icon').className = 'fa-solid fa-circle-xmark text-red-400 text-xs';
+    });
+}
+
+function onSearchInput() {
+  clearTimeout(_debounce);
+  _debounce = setTimeout(doSearch, 280);
+}
+
+function clearSearch() {
+  document.getElementById('search-input').value = '';
+  document.getElementById('clear-btn').classList.add('hidden');
+  _lastQuery = '';
+  document.getElementById('results-panel').classList.add('hidden');
+  document.getElementById('search-status').classList.add('hidden');
+  document.getElementById('engine-badge').classList.add('hidden');
+  document.getElementById('empty-state').innerHTML = `
+    <i class="fa-solid fa-magnifying-glass text-5xl mb-4 block opacity-15"></i>
+    <p class="text-base font-medium text-gray-500 dark:text-gray-400">Busca cualquier archivo en tu PC</p>
+    <p class="text-sm mt-1 opacity-70">Usa el campo de arriba o filtra por extensión</p>`;
+  document.getElementById('empty-state').classList.remove('hidden');
+}
+
+// ── Extension chips ───────────────────────────────────────────────────────────
+function toggleExt(ext) {
+  _activeExt = (_activeExt === ext) ? '' : ext;
+  document.querySelectorAll('.ext-chip').forEach(el => {
+    const active = el.getAttribute('onclick') === `toggleExt('${_activeExt}')`;
+    el.classList.toggle('active', active);
+  });
+  _lastQuery = '';
+  doSearch();
+}
+
+// ── File actions (path-based, no DB id needed) ────────────────────────────────
+function openFilePath(path) {
+  fetch('/api/open-path', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({path, action:'open'})
+  });
+}
+function openFolderPath(path) {
+  fetch('/api/open-path', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({path, action:'reveal'})
+  });
+}
+
+// Focus on load
+document.getElementById('search-input').focus();
+</script>
+{% endblock %}

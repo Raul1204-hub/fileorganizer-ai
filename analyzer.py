@@ -41,6 +41,11 @@ _VALID_CATEGORIAS = frozenset(
         "Comprimidos",
         "Programas",
         "Desconocido",
+        "Libros",
+        "Internet",
+        "Fuentes",
+        "Sistema",
+        "Diseño",
     }
 )
 
@@ -354,7 +359,7 @@ def _validate_analysis(data) -> dict:
     resumen = data.get("resumen", "")
     if not isinstance(resumen, str):
         resumen = str(resumen)
-    resumen = resumen.strip()[:300]
+    resumen = resumen.strip()[:800]
 
     return {"categoria": categoria, "etiquetas": etiquetas, "resumen": resumen}
 
@@ -370,7 +375,9 @@ def analyze_with_ollama(text: str, filename: str) -> dict:
     """
     prompt = (
         f'Analyze this document named "{filename}". '
-        "Respond in JSON with keys: categoria, etiquetas (list of tags), resumen.\n\n"
+        "Respond in JSON with keys: categoria, etiquetas (list of tags), resumen.\n"
+        "IMPORTANT: Write the resumen field in Spanish regardless of the document's language."
+        " Write 3-5 sentences summarizing the content clearly.\n\n"
         f"Document content:\n{text[:2500]}"
     )
 

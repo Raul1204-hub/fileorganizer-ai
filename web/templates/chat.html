@@ -512,22 +512,6 @@
       </div>
     </div>
 
-    <!-- Suggestion chips (shown while typing, hidden once messages exist) -->
-    <div id="chips-row" class="hidden">
-      <button onclick="sendSuggestion('¿Dónde están mis facturas?')" class="chip">
-        <i class="fa-solid fa-receipt text-xs"></i> Mis facturas
-      </button>
-      <button onclick="sendSuggestion('¿Qué archivos ocupan más espacio?')" class="chip">
-        <i class="fa-solid fa-weight-hanging text-xs"></i> Más pesados
-      </button>
-      <button onclick="sendSuggestion('¿Tengo archivos duplicados?')" class="chip">
-        <i class="fa-solid fa-copy text-xs"></i> Duplicados
-      </button>
-      <button onclick="sendSuggestion('¿Qué no he abierto en más de un año?')" class="chip">
-        <i class="fa-solid fa-clock-rotate-left text-xs"></i> Sin abrir +1 año
-      </button>
-    </div>
-
     <!-- Input area -->
     <div id="input-area">
       <div class="input-wrap">
@@ -702,17 +686,49 @@ function appendHistoryMessage(m) {
     <div class="msg-row msg-user">
       <div class="bubble">${esc(m.pregunta)}</div>
     </div>`);
-  // AI message
+
+  // Parse stored resultados
+  let resultados = [];
+  if (m.resultados_json) {
+    try { resultados = JSON.parse(m.resultados_json); } catch {}
+  }
+
+  const resultCards = (resultados||[]).slice(0,6).map(r=>`
+    <div class="file-card">
+      <div class="flex items-start justify-between gap-2 mb-0.5">
+        <a href="/archivo/${r.id||''}" class="block truncate flex-1 font-medium">
+          <i class="fa-solid fa-file mr-1 opacity-60"></i>${esc(r.nombre||'')}
+        </a>
+        <div class="flex gap-0.5 shrink-0">
+          <button onclick="openFile(${r.id})" title="Abrir archivo"
+                  class="p-1 rounded text-gray-400 hover:text-indigo-600 dark:hover:text-indigo-400 transition">
+            <i class="fa-solid fa-up-right-from-square text-[11px]"></i>
+          </button>
+          <button onclick="openLocation(${r.id})" title="Mostrar en explorador"
+                  class="p-1 rounded text-gray-400 hover:text-amber-500 transition">
+            <i class="fa-solid fa-folder-open text-[11px]"></i>
+          </button>
+        </div>
+      </div>
+      <div class="text-gray-400 truncate text-[11px]">${esc(r.ruta_actual||'')}</div>
+      <div class="flex flex-wrap gap-3 mt-1 text-gray-400 text-[11px]">
+        <span><i class="fa-solid fa-weight-hanging mr-0.5"></i>${formatSize(r.tamaño_bytes)}</span>
+        ${r.fecha_modificacion?`<span><i class="fa-regular fa-calendar mr-0.5"></i>mod. ${fmtDate(r.fecha_modificacion)}</span>`:''}
+      </div>
+    </div>`).join('');
+
   const sqlBlock = m.sql_generada && m.sql_generada !== '[búsqueda semántica]'
     ? `<details class="sql-details mt-1">
          <summary><i class="fa-solid fa-code mr-1"></i>Ver SQL</summary>
          <pre class="text-xs mt-1 bg-black/[0.04] dark:bg-white/[0.04] rounded-lg p-2.5 overflow-x-auto font-mono border border-black/[0.06] dark:border-white/[0.06]">${esc(m.sql_generada)}</pre>
        </details>` : '';
+
   msgs.insertAdjacentHTML('beforeend', `
     <div class="msg-row msg-ai">
       <div class="filex-avatar">🦊</div>
       <div class="content">
         <p>${esc(m.respuesta)}</p>
+        ${resultCards}
         ${sqlBlock}
       </div>
     </div>`);
@@ -822,7 +838,6 @@ function sendMessage() {
   document.getElementById('send-btn').disabled = true;
 
   hideEmptyState();
-  document.getElementById('chips-row').classList.add('hidden');
 
   const msgs = document.getElementById('chat-messages');
   if (window.librarianSetState) librarianSetState('working', 'Pensando…');
@@ -874,9 +889,21 @@ function sendMessage() {
 
     const resultCards = (d.resultados||[]).slice(0,6).map(r=>`
       <div class="file-card">
-        <a href="/archivo/${r.id||''}" class="block truncate mb-0.5">
-          <i class="fa-solid fa-file mr-1 opacity-60"></i>${esc(r.nombre||'')}
-        </a>
+        <div class="flex items-start justify-between gap-2 mb-0.5">
+          <a href="/archivo/${r.id||''}" class="block truncate flex-1 font-medium">
+            <i class="fa-solid fa-file mr-1 opacity-60"></i>${esc(r.nombre||'')}
+          </a>
+          <div class="flex gap-0.5 shrink-0">
+            <button onclick="openFile(${r.id})" title="Abrir archivo"
+                    class="p-1 rounded text-gray-400 hover:text-indigo-600 dark:hover:text-indigo-400 transition">
+              <i class="fa-solid fa-up-right-from-square text-[11px]"></i>
+            </button>
+            <button onclick="openLocation(${r.id})" title="Mostrar en explorador"
+                    class="p-1 rounded text-gray-400 hover:text-amber-500 transition">
+              <i class="fa-solid fa-folder-open text-[11px]"></i>
+            </button>
+          </div>
+        </div>
         <div class="text-gray-400 truncate text-[11px]">${esc(r.ruta_actual||'')}</div>
         <div class="flex flex-wrap gap-3 mt-1 text-gray-400 text-[11px]">
           <span><i class="fa-solid fa-weight-hanging mr-0.5"></i>${formatSize(r.tamaño_bytes)}</span>
@@ -993,14 +1020,17 @@ document.addEventListener('keydown', e => {
     document.getElementById('sys-verdict-icon').textContent = cfg.icon;
     document.getElementById('sys-verdict-title').textContent =
       `${cfg.title} — ${d.ram_total_gb} GB RAM · ${d.cpu_count} núcleos` +
-      (d.gpu_cuda ? ` · GPU CUDA: ${d.gpu_name}` : d.gpu_name ? ` · GPU: ${d.gpu_name}` : ' · CPU mode');
+      (d.gpu_cuda ? ` · CUDA: ${d.gpu_name}` :
+       d.gpu_amd  ? ` · ROCm: ${d.gpu_name}` :
+       d.gpu_name ? ` · GPU: ${d.gpu_name}` : ' · CPU mode');
 
     document.getElementById('si-ram-total').textContent = d.ram_total_gb+' GB';
     document.getElementById('si-ram-avail').textContent = d.ram_avail_gb+' GB libres';
     document.getElementById('si-cpu').textContent = `${d.cpu_count} núcleos${d.cpu_mhz?' · '+(d.cpu_mhz/1000).toFixed(1)+' GHz':''}`;
     document.getElementById('si-disk').textContent = `${d.disk_free_gb} GB libres / ${d.disk_total_gb} GB`;
     document.getElementById('si-gpu').textContent = d.gpu_name
-      ? `${d.gpu_name}${d.gpu_vram_gb?' — '+d.gpu_vram_gb+' GB VRAM':''}${d.gpu_cuda?' (CUDA ✓)':' (sin CUDA)'}`
+      ? `${d.gpu_name}${d.gpu_vram_gb?' — '+d.gpu_vram_gb+' GB VRAM':''}`
+        + (d.gpu_cuda ? ' (CUDA ✓)' : d.gpu_amd ? ' (ROCm/HIP ✓)' : ' (sin CUDA)')
       : 'No detectada — Ollama usará CPU';
 
     const modelsEl = document.getElementById('si-models');
@@ -1012,7 +1042,12 @@ document.addEventListener('keydown', e => {
       let html = `<span class="model-pill ${cls}" title="${m.optional?m.role+' (opcional)':m.role}">${icon} ${m.name}</span>`;
       if (!m.installed) {
         html += `<button class="model-pill" style="cursor:pointer;background:rgba(99,102,241,0.08);border:1px dashed rgba(99,102,241,0.4);color:#6366F1;font-family:monospace;font-size:0.63rem;"
-          title="Copiar" onclick="navigator.clipboard.writeText('${m.pull_cmd}').then(()=>{this.textContent='¡Copiado!';setTimeout(()=>{this.textContent='${m.pull_cmd}'},2000)})">${m.pull_cmd}</button>`;
+          title="Copiar al portapapeles" onclick="navigator.clipboard.writeText('${m.pull_cmd}').then(()=>{this.textContent='¡Copiado!';setTimeout(()=>{this.textContent='${m.pull_cmd}'},2000)})">${m.pull_cmd}</button>`;
+        if (m.optional) {
+          html += `<button class="model-pill" style="cursor:pointer;background:rgba(16,185,129,0.10);border:1px solid rgba(16,185,129,0.35);color:#059669;font-size:0.63rem;"
+            title="Abrir terminal e instalar" onclick="installModel('${m.name}', this)">
+            <i class="fa-solid fa-download mr-1"></i>Instalar</button>`;
+        }
       }
       modelsEl.insertAdjacentHTML('beforeend', html);
     });
@@ -1021,7 +1056,13 @@ document.addEventListener('keydown', e => {
     const issEl = document.getElementById('si-issues');
     const msgs2 = [
       ...d.issues.map(t=>`<div class="sys-row text-red-600 dark:text-red-400"><i class="fa-solid fa-circle-xmark w-4 shrink-0"></i><span>${mdB(t)}</span></div>`),
-      ...d.warnings.map(t=>`<div class="sys-row text-amber-600 dark:text-amber-400"><i class="fa-solid fa-triangle-exclamation w-4 shrink-0"></i><span>${mdB(t)}</span></div>`),
+      ...d.warnings.map(t => {
+        const pullMatch = t.match(/`ollama pull ([^`]+)`$/);
+        const installBtn = pullMatch
+          ? ` <button class="model-pill" style="cursor:pointer;background:rgba(16,185,129,0.10);border:1px solid rgba(16,185,129,0.35);color:#059669;font-size:0.63rem;margin-left:4px;" title="Abrir terminal e instalar" onclick="installModel('${pullMatch[1]}',this)"><i class="fa-solid fa-download" style="margin-right:3px"></i>Instalar</button>`
+          : '';
+        return `<div class="sys-row text-amber-600 dark:text-amber-400"><i class="fa-solid fa-triangle-exclamation w-4 shrink-0"></i><span>${mdB(t)}${installBtn}</span></div>`;
+      }),
     ];
     if (msgs2.length){ issEl.innerHTML=msgs2.join(''); issEl.classList.remove('hidden'); }
 
@@ -1036,7 +1077,7 @@ document.addEventListener('keydown', e => {
         : '<br><span style="font-size:0.7rem;opacity:0.85;color:#ef4444"><i class="fa-solid fa-circle-xmark mr-1"></i>Ollama no responde</span>');
     vEl.classList.remove('hidden');
 
-    if (d.verdict !== 'ok') document.getElementById('sys-panel').setAttribute('open','');
+    // sys-panel stays collapsed — user can expand manually
     if (window.librarianSetState) {
       if(d.verdict==='ok') librarianSetState('smart');
       else if(d.verdict==='warning') librarianSetState('thinking');
@@ -1048,6 +1089,30 @@ document.addEventListener('keydown', e => {
     document.getElementById('sys-verdict-icon').textContent = '⚠️';
   });
 })();
+
+// ── Model installer ───────────────────────────────────────────────────────────
+function installModel(name, btn) {
+  btn.disabled = true;
+  btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin mr-1"></i>Abriendo…';
+  fetch('/api/install-model', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({model: name}),
+  }).then(r => r.json()).then(d => {
+    if (d.error) { showToast(d.error, 'error'); btn.disabled = false; btn.innerHTML = '<i class="fa-solid fa-download mr-1"></i>Instalar'; }
+    else showToast(`Terminal abierta: ollama pull ${name}`, 'info');
+  }).catch(() => { btn.disabled = false; btn.innerHTML = '<i class="fa-solid fa-download mr-1"></i>Instalar'; });
+}
+
+// ── File reveal helpers ───────────────────────────────────────────────────────
+function openFile(id) {
+  fetch(`/api/open-file/${id}`).then(r=>r.json())
+    .then(d=>{ if(d.error) showToast(d.error, 'error'); });
+}
+function openLocation(id) {
+  fetch(`/api/open-location/${id}`).then(r=>r.json())
+    .then(d=>{ if(d.error) showToast(d.error, 'error'); });
+}
 
 // ── Init ──────────────────────────────────────────────────────────────────────
 loadConversations();

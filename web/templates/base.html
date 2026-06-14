@@ -324,6 +324,9 @@
       <a href="/explorar" class="nav-link {% if '/explorar' in request.path %}active{% endif %}">
         <i class="fa-solid fa-folder-tree w-4 text-center text-emerald-400"></i> Explorar archivos
       </a>
+      <a href="/buscar" class="nav-link {% if '/buscar' in request.path %}active{% endif %}">
+        <i class="fa-solid fa-magnifying-glass w-4 text-center text-yellow-400"></i> Buscar en PC
+      </a>
       <a href="/chat" class="nav-link {% if request.path == '/chat' %}active{% endif %}">
         <i class="fa-solid fa-comments w-4 text-center text-violet-400"></i> Chat IA
       </a>
@@ -345,6 +348,9 @@
       </a>
       <a href="/renombrar" class="nav-link {% if '/renombrar' in request.path %}active{% endif %}">
         <i class="fa-solid fa-pen-to-square w-4 text-center text-sky-400"></i> Renombrar
+      </a>
+      <a href="/plex" class="nav-link {% if '/plex' in request.path %}active{% endif %}">
+        <i class="fa-solid fa-tv w-4 text-center text-purple-400"></i> PLEX renamer
       </a>
 
       <div class="px-2 pb-1 pt-3">
